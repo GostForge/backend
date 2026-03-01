@@ -1,0 +1,22 @@
+target/
+build/
+*.jar
+*.class
+.gradle/
+
+# VCS / CI
+.git/
+.github/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Env / logs
+.env
+.env.*
+*.log
+
+# Docs and maps not needed for image build
+README.md

@@ -14,6 +14,8 @@ import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import jakarta.annotation.PostConstruct;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
@@ -87,26 +89,32 @@ public class Md2GostConverter implements FormatConverter {
                 .uri("/convert")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(builder.build()))
-                .exchangeToMono(response -> {
-                    List<String> warnings = parseWarningsHeader(
-                            response.headers().asHttpHeaders().getFirst("X-Conversion-Warnings"));
-                    return response.bodyToMono(byte[].class)
-                            .map(body -> {
-                                if (body == null || body.length == 0) {
-                                    throw new RuntimeException("md2gost returned empty response");
-                                }
-                                return new ConversionResult(body, warnings);
-                            });
-                })
+                .exchangeToMono(response -> response.bodyToMono(byte[].class)
+                        .map(body -> {
+                            if (body == null || body.length < 4) {
+                                throw new RuntimeException("md2gost returned malformed response");
+                            }
+                            // Binary framing: [4 bytes: warnings JSON length][warnings JSON bytes][DOCX bytes]
+                            int jsonLen = ((body[0] & 0xFF) << 24)
+                                        | ((body[1] & 0xFF) << 16)
+                                        | ((body[2] & 0xFF) << 8)
+                                        |  (body[3] & 0xFF);
+                            String warningsJson = new String(body, 4, jsonLen, StandardCharsets.UTF_8);
+                            byte[] docxBytes = Arrays.copyOfRange(body, 4 + jsonLen, body.length);
+                            if (docxBytes.length == 0) {
+                                throw new RuntimeException("md2gost returned empty docx");
+                            }
+                            return new ConversionResult(docxBytes, parseWarnings(warningsJson));
+                        }))
                 .block();
     }
 
-    private List<String> parseWarningsHeader(String header) {
-        if (header == null || header.isBlank()) return List.of();
+    private List<String> parseWarnings(String json) {
+        if (json == null || json.isBlank()) return List.of();
         try {
-            return OM.readValue(header, new TypeReference<>() {});
+            return OM.readValue(json, new TypeReference<>() {});
         } catch (Exception e) {
-            log.warn("Failed to parse X-Conversion-Warnings header: {}", e.getMessage());
+            log.warn("Failed to parse warnings JSON: {}", e.getMessage());
             return List.of();
         }
     }

@@ -37,13 +37,13 @@ public class InternalServiceFilter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
 
-        if (!request.getRequestURI().startsWith("/internal/")) {
+        String apiKey = request.getHeader("X-Internal-Api-Key");
+        if (apiKey == null) {
             chain.doFilter(request, response);
             return;
         }
 
-        String apiKey = request.getHeader("X-Internal-Api-Key");
-        if (apiKey == null || !apiKey.equals(internalApiKey)) {
+        if (!apiKey.equals(internalApiKey)) {
             response.sendError(HttpServletResponse.SC_FORBIDDEN, "Invalid internal API key");
             return;
         }

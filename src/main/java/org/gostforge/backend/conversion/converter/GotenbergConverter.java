@@ -47,7 +47,9 @@ public class GotenbergConverter implements FormatConverter {
     }
 
     @Override
-    public ConversionResult convert(byte[] input, Map<String, byte[]> assets) {
+    public ConversionResult convert(Map<String, byte[]> files) {
+        // Expect exactly one file (the DOCX to convert)
+        byte[] input = files.values().iterator().next();
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
                 return doConvert(input);

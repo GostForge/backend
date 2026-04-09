@@ -53,10 +53,10 @@ public class Md2GostConverter implements FormatConverter {
     }
 
     @Override
-    public ConversionResult convert(byte[] input, Map<String, byte[]> assets) {
+    public ConversionResult convert(Map<String, byte[]> files) {
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {
-                return doConvert(input, assets);
+                return doConvert(files);
             } catch (Exception e) {
                 if (attempt < MAX_RETRIES - 1) {
                     log.warn("md2gost attempt {} failed, retrying in {}ms: {}",
@@ -71,18 +71,16 @@ public class Md2GostConverter implements FormatConverter {
         throw new RuntimeException("md2gost unreachable");
     }
 
-    private ConversionResult doConvert(byte[] mdBytes, Map<String, byte[]> assets) {
+    private ConversionResult doConvert(Map<String, byte[]> files) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
-        builder.part("file", new ByteArrayResource(mdBytes) {
-            @Override public String getFilename() { return "document.md"; }
-        }).contentType(MediaType.TEXT_PLAIN);
-
-        for (Map.Entry<String, byte[]> asset : assets.entrySet()) {
-            String path = asset.getKey();
-            byte[] data = asset.getValue();
-            builder.part("assets", new ByteArrayResource(data) {
+        for (Map.Entry<String, byte[]> entry : files.entrySet()) {
+            String path = entry.getKey();
+            byte[] data = entry.getValue();
+            MediaType contentType = path.endsWith(".md") ? MediaType.TEXT_PLAIN
+                    : MediaType.APPLICATION_OCTET_STREAM;
+            builder.part("files", new ByteArrayResource(data) {
                 @Override public String getFilename() { return path; }
-            }).contentType(MediaType.APPLICATION_OCTET_STREAM);
+            }).contentType(contentType);
         }
 
         return client.post()

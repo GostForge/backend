@@ -19,6 +19,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
 import java.util.zip.ZipEntry;
@@ -40,6 +41,16 @@ public class ConversionService {
     private static final List<String> PROCESSING_STATUSES =
             List.of("MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF");
     private static final ObjectMapper OM = new ObjectMapper();
+
+    // ── ZIP safety limits ────────────────────────────────────────────────────
+    /** Maximum number of entries allowed in a ZIP archive. */
+    private static final int ZIP_MAX_ENTRIES = 500;
+    /** Maximum total uncompressed size of all entries (200 MB). */
+    private static final long ZIP_MAX_TOTAL_SIZE = 200L * 1024 * 1024;
+    /** Maximum single-entry uncompressed size (50 MB). */
+    private static final long ZIP_MAX_ENTRY_SIZE = 50L * 1024 * 1024;
+    /** Compression ratio threshold — entries exceeding this are treated as a zip bomb. */
+    private static final double ZIP_MAX_RATIO = 100.0;
 
     /**
      * Spring injects all {@link FormatConverter} beans; we index them
@@ -111,17 +122,38 @@ public class ConversionService {
                 .build();
         job = jobRepository.save(job);
 
-        // Store the uploaded file in MinIO for the worker
-        // If it's a ZIP, extract the first .md file; otherwise store directly
-        String mdKey = "quick/" + job.getId() + "/input.md";
+        String jobPrefix = "quick/" + job.getId() + "/";
+        boolean hasMd = false;
+
         try {
             byte[] rawBytes = file.getBytes();
-            byte[] mdBytes = extractMdFromZipOrRaw(rawBytes, file.getOriginalFilename());
-            minioStorage.putObject(mdKey, mdBytes, "text/markdown");
+            String originalName = file.getOriginalFilename();
+
+            if (isZip(rawBytes, originalName)) {
+                // Extract full ZIP structure into MinIO with safety checks
+                Map<String, byte[]> extracted = extractZip(rawBytes);
+                for (Map.Entry<String, byte[]> entry : extracted.entrySet()) {
+                    String path = entry.getKey();
+                    minioStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
+                    if (path.endsWith(".md")) hasMd = true;
+                }
+            } else {
+                // Single .md file
+                String name = (originalName != null && originalName.endsWith(".md"))
+                        ? originalName : "input.md";
+                minioStorage.putObject(jobPrefix + name, rawBytes, "text/markdown");
+                hasMd = true;
+            }
+        } catch (ApiException e) {
+            throw e;
         } catch (Exception e) {
             throw new RuntimeException("Failed to store uploaded file", e);
         }
-        job.setMergedMdKey(mdKey);
+
+        if (!hasMd) {
+            throw ApiException.badRequest("NO_MD_FILE", "Upload contains no .md file");
+        }
+
         jobRepository.save(job);
 
         // Enqueue AFTER transaction commits so the worker can find the DB row
@@ -186,7 +218,7 @@ public class ConversionService {
 
         // Assemble all files from CAS into job workspace in MinIO
         String jobPrefix = "quick/" + job.getId() + "/";
-        String mdKey = null;
+        boolean hasMd = false;
         for (Map.Entry<String, String> entry : manifest.entrySet()) {
             String path = entry.getKey();
             String hash = entry.getValue();
@@ -196,18 +228,13 @@ public class ConversionService {
             }
             String objectKey = jobPrefix + path;
             minioStorage.putObject(objectKey, data, guessContentType(path));
-
-            // Find the main .md file
-            if (path.endsWith(".md") && (mdKey == null || path.length() < mdKey.length())) {
-                mdKey = objectKey;
-            }
+            if (path.endsWith(".md")) hasMd = true;
         }
 
-        if (mdKey == null) {
+        if (!hasMd) {
             throw ApiException.badRequest("NO_MD_FILE", "Manifest contains no .md file");
         }
 
-        job.setMergedMdKey(mdKey);
         jobRepository.save(job);
 
         UUID jobId = job.getId();
@@ -246,21 +273,17 @@ public class ConversionService {
         jobRepository.save(job);
 
         try {
-            // Step 1: Download the input MD from MinIO
-            byte[] mdBytes = minioStorage.getObject(job.getMergedMdKey());
-
-            // Step 1b: Collect asset files (images, etc.) for manifest-based jobs
+            // Step 1: Collect ALL project files from MinIO job workspace
             String jobPrefix = "quick/" + jobId + "/";
-            Map<String, byte[]> assets = new java.util.LinkedHashMap<>();
+            Map<String, byte[]> projectFiles = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
             List<String> allKeys = minioStorage.listObjects(jobPrefix);
-            String mdKey = job.getMergedMdKey();
             for (String key : allKeys) {
-                if (key.equals(mdKey) || key.contains("/output.") || key.contains("/result.")) {
+                if (key.contains("/output.") || key.contains("/result.")) {
                     continue;
                 }
                 String relativePath = key.substring(jobPrefix.length());
                 if (!relativePath.isEmpty()) {
-                    assets.put(relativePath, minioStorage.getObject(key));
+                    projectFiles.put(relativePath, minioStorage.getObject(key));
                 }
             }
 
@@ -272,7 +295,7 @@ public class ConversionService {
             jobRepository.save(job);
 
             FormatConverter md2docx = getConverter(ConversionFormat.MARKDOWN, ConversionFormat.DOCX);
-            FormatConverter.ConversionResult docxResult = md2docx.convert(mdBytes, assets);
+            FormatConverter.ConversionResult docxResult = md2docx.convert(projectFiles);
             byte[] docxBytes = docxResult.data();
             allWarnings.addAll(docxResult.warnings());
 
@@ -287,7 +310,7 @@ public class ConversionService {
                 jobRepository.save(job);
 
                 FormatConverter docx2pdf = getConverter(ConversionFormat.DOCX, ConversionFormat.PDF);
-                FormatConverter.ConversionResult pdfResult = docx2pdf.convert(docxBytes, Map.of());
+                FormatConverter.ConversionResult pdfResult = docx2pdf.convert(Map.of("output.docx", docxBytes));
                 allWarnings.addAll(pdfResult.warnings());
 
                 String pdfKey = "quick/" + jobId + "/result.pdf";
@@ -370,35 +393,97 @@ public class ConversionService {
     }
 
     /**
-     * If the raw bytes are a ZIP archive, extract the first .md file from it.
-     * Otherwise, return the raw bytes as-is (assumed to be a plain .md file).
+     * Check whether raw bytes look like a ZIP archive.
      */
-    private byte[] extractMdFromZipOrRaw(byte[] rawBytes, String originalFilename) throws IOException {
-        boolean isZip = (originalFilename != null && originalFilename.endsWith(".zip"))
-                || (rawBytes.length >= 4
-                    && rawBytes[0] == 0x50 && rawBytes[1] == 0x4B
-                    && rawBytes[2] == 0x03 && rawBytes[3] == 0x04);
+    private boolean isZip(byte[] data, String filename) {
+        if (filename != null && filename.toLowerCase().endsWith(".zip")) return true;
+        return data.length >= 4
+                && data[0] == 0x50 && data[1] == 0x4B
+                && data[2] == 0x03 && data[3] == 0x04;
+    }
 
-        if (!isZip) {
-            return rawBytes;
-        }
+    /**
+     * Safely extract all files from a ZIP archive into an in-memory map keyed by
+     * relative path.  Performs the following security checks:
+     * <ul>
+     *   <li>Path-traversal prevention (rejects entries with ".." or absolute paths)</li>
+     *   <li>Maximum entry count ({@value #ZIP_MAX_ENTRIES})</li>
+     *   <li>Maximum total uncompressed size ({@value #ZIP_MAX_TOTAL_SIZE} bytes)</li>
+     *   <li>Maximum single-entry size ({@value #ZIP_MAX_ENTRY_SIZE} bytes)</li>
+     *   <li>Compression-ratio bomb detection (ratio &gt; {@value #ZIP_MAX_RATIO})</li>
+     *   <li>Corrupt/truncated entry detection</li>
+     * </ul>
+     */
+    private Map<String, byte[]> extractZip(byte[] rawBytes) throws IOException {
+        Map<String, byte[]> files = new LinkedHashMap<>();
+        long totalUncompressed = 0;
+        int entryCount = 0;
 
         try (ZipInputStream zis = new ZipInputStream(new ByteArrayInputStream(rawBytes))) {
             ZipEntry entry;
             while ((entry = zis.getNextEntry()) != null) {
-                if (!entry.isDirectory() && entry.getName().endsWith(".md")) {
-                    ByteArrayOutputStream baos = new ByteArrayOutputStream();
-                    byte[] buf = new byte[8192];
-                    int n;
-                    while ((n = zis.read(buf)) > 0) {
-                        baos.write(buf, 0, n);
-                    }
-                    log.info("Extracted '{}' ({} bytes) from ZIP", entry.getName(), baos.size());
-                    return baos.toByteArray();
+                if (entry.isDirectory()) continue;
+
+                String name = entry.getName().replace('\\', '/');
+
+                // ── Path-traversal guard ──────────────────────────────
+                Path normalized = Path.of(name).normalize();
+                if (normalized.isAbsolute() || normalized.startsWith("..")) {
+                    throw ApiException.badRequest("ZIP_PATH_TRAVERSAL",
+                            "Blocked path-traversal entry: " + name);
                 }
+                name = normalized.toString().replace('\\', '/');
+
+                // ── Entry count limit ─────────────────────────────────
+                if (++entryCount > ZIP_MAX_ENTRIES) {
+                    throw ApiException.badRequest("ZIP_TOO_MANY_ENTRIES",
+                            "ZIP exceeds maximum entry count (" + ZIP_MAX_ENTRIES + ")");
+                }
+
+                // ── Read entry with size guards ───────────────────────
+                ByteArrayOutputStream baos = new ByteArrayOutputStream();
+                byte[] buf = new byte[8192];
+                long entrySize = 0;
+                long compressedSize = 0;
+                int n;
+                while ((n = zis.read(buf)) > 0) {
+                    entrySize += n;
+                    if (entrySize > ZIP_MAX_ENTRY_SIZE) {
+                        throw ApiException.badRequest("ZIP_ENTRY_TOO_LARGE",
+                                "Entry '" + name + "' exceeds " + (ZIP_MAX_ENTRY_SIZE / (1024 * 1024)) + " MB");
+                    }
+                    baos.write(buf, 0, n);
+                }
+
+                totalUncompressed += entrySize;
+                if (totalUncompressed > ZIP_MAX_TOTAL_SIZE) {
+                    throw ApiException.badRequest("ZIP_TOO_LARGE",
+                            "Total uncompressed size exceeds " + (ZIP_MAX_TOTAL_SIZE / (1024 * 1024)) + " MB");
+                }
+
+                // ── Compression-ratio bomb detection ──────────────────
+                compressedSize = entry.getCompressedSize();
+                if (compressedSize > 0 && entrySize > 0) {
+                    double ratio = (double) entrySize / compressedSize;
+                    if (ratio > ZIP_MAX_RATIO) {
+                        throw ApiException.badRequest("ZIP_BOMB",
+                                "Suspected zip bomb: entry '" + name + "' ratio=" + String.format("%.1f", ratio));
+                    }
+                }
+
+                files.put(name, baos.toByteArray());
+                log.debug("Extracted '{}' ({} bytes) from ZIP", name, entrySize);
             }
+        } catch (java.util.zip.ZipException e) {
+            throw ApiException.badRequest("ZIP_CORRUPT", "ZIP archive is corrupted: " + e.getMessage());
         }
-        throw new RuntimeException("ZIP archive does not contain any .md file");
+
+        if (files.isEmpty()) {
+            throw ApiException.badRequest("ZIP_EMPTY", "ZIP archive is empty");
+        }
+
+        log.info("Extracted {} files ({} bytes total) from ZIP", entryCount, totalUncompressed);
+        return files;
     }
 
     private String guessContentType(String path) {

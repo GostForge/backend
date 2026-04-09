@@ -21,12 +21,11 @@ public interface FormatConverter {
     /**
      * Execute the conversion.
      *
-     * @param input  raw bytes of the input document
-     * @param assets additional assets (images, etc.) keyed by relative path;
-     *               may be empty for converters that don't need them
+     * @param files all input files keyed by relative path (e.g. "doc.md", "img/pic.png");
+     *              the converter picks the files it needs by extension/name
      * @return conversion result containing output bytes and optional warnings
      */
-    ConversionResult convert(byte[] input, Map<String, byte[]> assets);
+    ConversionResult convert(Map<String, byte[]> files);
 
     /**
      * Result of a single converter step.

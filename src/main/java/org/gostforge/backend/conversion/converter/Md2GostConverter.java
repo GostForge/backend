@@ -12,6 +12,7 @@ import org.springframework.http.client.MultipartBodyBuilder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Mono;
 
 import jakarta.annotation.PostConstruct;
 import java.nio.charset.StandardCharsets;

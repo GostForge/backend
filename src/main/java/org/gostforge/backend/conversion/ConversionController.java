@@ -119,12 +119,18 @@ public class ConversionController {
 
     @GetMapping("/{jobId}/stream")
     public SseEmitter streamStatus(Authentication auth, @PathVariable UUID jobId) {
-        UUID userId = (UUID) auth.getPrincipal();
+        UUID userId = auth != null ? (UUID) auth.getPrincipal() : null;
         SseEmitter emitter = new SseEmitter(300_000L);
 
         sseExecutor.scheduleAtFixedRate(() -> {
             try {
-                ConversionJob job = jobRepository.findByIdAndUserId(jobId, userId).orElse(null);
+                ConversionJob job;
+                if (userId != null) {
+                    job = jobRepository.findByIdAndUserId(jobId, userId).orElse(null);
+                } else {
+                    job = jobRepository.findById(jobId).orElse(null);
+                }
+                
                 if (job == null) {
                     emitter.completeWithError(new RuntimeException("Job not found"));
                     return;

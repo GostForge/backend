@@ -73,21 +73,36 @@ public class Md2GostConverter implements FormatConverter {
 
     private ConversionResult doConvert(Map<String, byte[]> files) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
+        boolean mdFileAdded = false;
+        
         for (Map.Entry<String, byte[]> entry : files.entrySet()) {
             String path = entry.getKey();
             byte[] data = entry.getValue();
-            MediaType contentType = path.endsWith(".md") ? MediaType.TEXT_PLAIN
-                    : MediaType.APPLICATION_OCTET_STREAM;
-            builder.part("files", new ByteArrayResource(data) {
-                @Override public String getFilename() { return path; }
-            }).contentType(contentType);
+            
+            if (!mdFileAdded && (path.endsWith(".md") || path.endsWith(".markdown"))) {
+                builder.part("file", new ByteArrayResource(data) {
+                    @Override public String getFilename() { return path; }
+                }).contentType(MediaType.TEXT_PLAIN);
+                mdFileAdded = true;
+            } else {
+                builder.part("assets", new ByteArrayResource(data) {
+                    @Override public String getFilename() { return path; }
+                }).contentType(MediaType.APPLICATION_OCTET_STREAM);
+            }
         }
 
         return client.post()
                 .uri("/convert")
                 .contentType(MediaType.MULTIPART_FORM_DATA)
                 .body(BodyInserters.fromMultipartData(builder.build()))
-                .exchangeToMono(response -> response.bodyToMono(byte[].class)
+                .exchangeToMono(response -> {
+                    if (!response.statusCode().is2xxSuccessful()) {
+                        return response.bodyToMono(String.class)
+                            .flatMap(errorBody -> Mono.error(new RuntimeException(
+                                "md2gost error " + response.statusCode() + ": " + errorBody
+                            )));
+                    }
+                    return response.bodyToMono(byte[].class)
                         .map(body -> {
                             if (body == null || body.length < 4) {
                                 throw new RuntimeException("md2gost returned malformed response");
@@ -103,7 +118,8 @@ public class Md2GostConverter implements FormatConverter {
                                 throw new RuntimeException("md2gost returned empty docx");
                             }
                             return new ConversionResult(docxBytes, parseWarnings(warningsJson));
-                        }))
+                        });
+                })
                 .block();
     }
 

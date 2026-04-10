@@ -102,11 +102,9 @@ public class ConversionController {
         }
 
         String format = job.getOutputFormat().toLowerCase();
-        String key = "pdf".equalsIgnoreCase(format) ? job.getPdfKey() : job.getDocxKey();
-        String contentType = "pdf".equalsIgnoreCase(format) 
-                ? "application/pdf" 
-                : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-        String filename = "output." + format;
+        String key = "pdf".equalsIgnoreCase(format) ? job.getPdfKey() : ("markdown".equalsIgnoreCase(format) ? job.getMergedMdKey() : job.getDocxKey());
+        String contentType = "pdf".equalsIgnoreCase(format) ? "application/pdf" : ("markdown".equalsIgnoreCase(format) ? "application/zip" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+        String filename = "markdown".equalsIgnoreCase(format) ? "result.zip" : ("output." + format);
 
         if (key == null) {
             throw ApiException.notFound("Result file is missing");

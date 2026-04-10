@@ -123,7 +123,7 @@ public class ConversionService {
         job = jobRepository.save(job);
 
         String jobPrefix = "quick/" + job.getId() + "/";
-        boolean hasMd = false;
+        boolean hasMd = false; boolean hasDocx = false;
 
         try {
             byte[] rawBytes = file.getBytes();
@@ -135,14 +135,15 @@ public class ConversionService {
                 for (Map.Entry<String, byte[]> entry : extracted.entrySet()) {
                     String path = entry.getKey();
                     minioStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
-                    if (path.endsWith(".md")) hasMd = true;
+                    if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
                 }
             } else {
                 // Single .md file
-                String name = (originalName != null && originalName.endsWith(".md"))
-                        ? originalName : "input.md";
-                minioStorage.putObject(jobPrefix + name, rawBytes, "text/markdown");
-                hasMd = true;
+                String name = (originalName != null && originalName.endsWith(".docx")) ? (originalName) : ((originalName != null && originalName.endsWith(".md")) ? originalName : "input.md");
+                String contentType = name.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/markdown";
+                minioStorage.putObject(jobPrefix + name, rawBytes, contentType);
+                if (name.endsWith(".md")) hasMd = true;
+                if (name.endsWith(".docx")) hasDocx = true;
             }
         } catch (ApiException e) {
             throw e;
@@ -150,8 +151,10 @@ public class ConversionService {
             throw new RuntimeException("Failed to store uploaded file", e);
         }
 
-        if (!hasMd) {
-            throw ApiException.badRequest("NO_MD_FILE", "Upload contains no .md file");
+        if ("MARKDOWN".equalsIgnoreCase(job.getOutputFormat())) {
+            if (!hasDocx && !hasMd) throw ApiException.badRequest("NO_INPUT_FILE", "Upload contains no .docx or .md file");
+        } else {
+            if (!hasMd) throw ApiException.badRequest("NO_MD_FILE", "Upload contains no .md file");
         }
 
         jobRepository.save(job);
@@ -218,7 +221,7 @@ public class ConversionService {
 
         // Assemble all files from CAS into job workspace in MinIO
         String jobPrefix = "quick/" + job.getId() + "/";
-        boolean hasMd = false;
+        boolean hasMd = false; boolean hasDocx = false;
         for (Map.Entry<String, String> entry : manifest.entrySet()) {
             String path = entry.getKey();
             String hash = entry.getValue();
@@ -228,10 +231,10 @@ public class ConversionService {
             }
             String objectKey = jobPrefix + path;
             minioStorage.putObject(objectKey, data, guessContentType(path));
-            if (path.endsWith(".md")) hasMd = true;
+            if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
         }
 
-        if (!hasMd) {
+        if ("MARKDOWN".equalsIgnoreCase(job.getOutputFormat())) { if (!hasDocx && !hasMd) throw ApiException.badRequest("NO_INPUT_FILE", "Upload contains no .docx or .md file"); } else if (!hasMd) {
             throw ApiException.badRequest("NO_MD_FILE", "Manifest contains no .md file");
         }
 
@@ -287,35 +290,50 @@ public class ConversionService {
                 }
             }
 
+
+
             OutputFormat fmt = OutputFormat.fromString(job.getOutputFormat());
             List<String> allWarnings = new ArrayList<>();
 
-            // Step 2: MARKDOWN → DOCX via converter pipeline
-            job.setStatus("CONVERTING_DOCX");
-            jobRepository.save(job);
+            if (fmt == OutputFormat.MARKDOWN) {
+                job.setStatus("CONVERTING_MD");
+                jobRepository.save(job);
+                FormatConverter docx2md = getConverter(ConversionFormat.DOCX, ConversionFormat.MARKDOWN);
+                FormatConverter.ConversionResult mdResult = docx2md.convert(projectFiles);
+                byte[] zipBytes = mdResult.data();
+                allWarnings.addAll(mdResult.warnings());
 
-            FormatConverter md2docx = getConverter(ConversionFormat.MARKDOWN, ConversionFormat.DOCX);
-            FormatConverter.ConversionResult docxResult = md2docx.convert(projectFiles);
-            byte[] docxBytes = docxResult.data();
-            allWarnings.addAll(docxResult.warnings());
-
-            String docxKey = "quick/" + jobId + "/output.docx";
-            minioStorage.putObject(docxKey, docxBytes,
-                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-            job.setDocxKey(docxKey);
-
-            // Step 3: DOCX → PDF via converter pipeline (if needed)
-            if (fmt == OutputFormat.PDF || fmt == OutputFormat.BOTH) {
-                job.setStatus("CONVERTING_PDF");
+                String zipKey = "quick/" + jobId + "/output-md.zip";
+                minioStorage.putObject(zipKey, zipBytes, "application/zip");
+                job.setMergedMdKey(zipKey);
+            } else {
+                // Step 2: MARKDOWN → DOCX via converter pipeline
+                job.setStatus("CONVERTING_DOCX");
                 jobRepository.save(job);
 
-                FormatConverter docx2pdf = getConverter(ConversionFormat.DOCX, ConversionFormat.PDF);
-                FormatConverter.ConversionResult pdfResult = docx2pdf.convert(Map.of("output.docx", docxBytes));
-                allWarnings.addAll(pdfResult.warnings());
+                FormatConverter md2docx = getConverter(ConversionFormat.MARKDOWN, ConversionFormat.DOCX);
+                FormatConverter.ConversionResult docxResult = md2docx.convert(projectFiles);
+                byte[] docxBytes = docxResult.data();
+                allWarnings.addAll(docxResult.warnings());
 
-                String pdfKey = "quick/" + jobId + "/result.pdf";
-                minioStorage.putObject(pdfKey, pdfResult.data(), "application/pdf");
-                job.setPdfKey(pdfKey);
+                String docxKey = "quick/" + jobId + "/output.docx";
+                minioStorage.putObject(docxKey, docxBytes,
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+                job.setDocxKey(docxKey);
+
+                // Step 3: DOCX → PDF via converter pipeline (if needed)
+                if (fmt == OutputFormat.PDF || fmt == OutputFormat.BOTH) {
+                    job.setStatus("CONVERTING_PDF");
+                    jobRepository.save(job);
+
+                    FormatConverter docx2pdf = getConverter(ConversionFormat.DOCX, ConversionFormat.PDF);
+                    FormatConverter.ConversionResult pdfResult = docx2pdf.convert(Map.of("output.docx", docxBytes));
+                    allWarnings.addAll(pdfResult.warnings());
+
+                    String pdfKey = "quick/" + jobId + "/result.pdf";
+                    minioStorage.putObject(pdfKey, pdfResult.data(), "application/pdf");
+                    job.setPdfKey(pdfKey);
+                }
             }
 
             // Store warnings as JSON array
@@ -396,6 +414,7 @@ public class ConversionService {
      * Check whether raw bytes look like a ZIP archive.
      */
     private boolean isZip(byte[] data, String filename) {
+        if (filename != null && filename.toLowerCase().endsWith(".docx")) return false;
         if (filename != null && filename.toLowerCase().endsWith(".zip")) return true;
         return data.length >= 4
                 && data[0] == 0x50 && data[1] == 0x4B

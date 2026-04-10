@@ -7,7 +7,8 @@ package org.gostforge.backend.conversion;
 public enum OutputFormat {
     DOCX,
     PDF,
-    BOTH;
+    BOTH,
+    MARKDOWN;
 
     /**
      * Parse from a string value, defaulting to DOCX for unknown inputs.

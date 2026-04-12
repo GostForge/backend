@@ -1,9 +1,9 @@
 -- ════════════════════════════════════════════════════
--- GostForge — V1: Initial schema (Quick Convert, no projects)
+-- GostForge — V1: Initial schema
 -- ════════════════════════════════════════════════════
 
 CREATE TABLE users (
-    id               UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    id               UUID         PRIMARY KEY,
     username         VARCHAR(50)  NOT NULL UNIQUE,
     email            VARCHAR(255) NOT NULL UNIQUE,
     password_hash    VARCHAR(255) NOT NULL,
@@ -16,7 +16,7 @@ CREATE TABLE users (
 );
 
 CREATE TABLE conversion_jobs (
-    id             UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    id             UUID         PRIMARY KEY,
     user_id        UUID         NOT NULL REFERENCES users(id),
     status         VARCHAR(30)  NOT NULL DEFAULT 'PENDING',
     output_format  VARCHAR(10)  NOT NULL DEFAULT 'DOCX',
@@ -26,6 +26,7 @@ CREATE TABLE conversion_jobs (
     md2gost_job_id VARCHAR(100),
     error_message  TEXT,
     error_stage    VARCHAR(50),
+    warnings       TEXT,
     started_at     TIMESTAMPTZ,
     completed_at   TIMESTAMPTZ,
     created_at     TIMESTAMPTZ  NOT NULL DEFAULT now(),
@@ -36,7 +37,7 @@ CREATE INDEX idx_jobs_user   ON conversion_jobs(user_id);
 CREATE INDEX idx_jobs_status ON conversion_jobs(status);
 
 CREATE TABLE personal_access_tokens (
-    id          UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    id          UUID         PRIMARY KEY,
     user_id     UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name        VARCHAR(100) NOT NULL,
     token_hash  VARCHAR(64)  NOT NULL UNIQUE,
@@ -50,7 +51,7 @@ CREATE INDEX idx_pat_user ON personal_access_tokens(user_id);
 CREATE INDEX idx_pat_hash ON personal_access_tokens(token_hash);
 
 CREATE TABLE user_cas_files (
-    id               UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+    id               SERIAL       PRIMARY KEY,
     user_id          UUID         NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     sha256           VARCHAR(64)  NOT NULL,
     size_bytes       BIGINT       NOT NULL,

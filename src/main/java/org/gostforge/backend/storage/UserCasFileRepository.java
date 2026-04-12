@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface UserCasFileRepository extends JpaRepository<UserCasFile, UUID> {
+public interface UserCasFileRepository extends JpaRepository<UserCasFile, Integer> {
 
     Optional<UserCasFile> findByUserIdAndSha256(UUID userId, String sha256);
 

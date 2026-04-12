@@ -15,7 +15,7 @@ import java.util.UUID;
 public class PersonalAccessToken {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
+    @org.hibernate.annotations.UuidGenerator(style = org.hibernate.annotations.UuidGenerator.Style.TIME)
     private UUID id;
 
     @Column(name = "user_id", nullable = false)

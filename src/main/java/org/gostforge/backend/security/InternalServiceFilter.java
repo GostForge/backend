@@ -48,29 +48,7 @@ public class InternalServiceFilter extends OncePerRequestFilter {
             return;
         }
 
-        // Try to resolve user by Telegram chat ID
-        String chatIdHeader = request.getHeader("X-Telegram-Chat-Id");
-        if (chatIdHeader != null) {
-            try {
-                long chatId = Long.parseLong(chatIdHeader);
-                Optional<User> user = userRepository.findByTelegramChatId(chatId);
-                if (user.isEmpty()) {
-                    response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-                    response.setContentType("application/json");
-                    response.getWriter().write("{\"error\":\"Telegram account not linked\"}");
-                    return;
-                }
-                var auth = new UsernamePasswordAuthenticationToken(
-                        user.get().getId(), null,
-                        List.of(new SimpleGrantedAuthority("ROLE_USER"),
-                                new SimpleGrantedAuthority("ROLE_INTERNAL")));
-                auth.setDetails("INTERNAL:telegram:" + chatId);
-                SecurityContextHolder.getContext().setAuthentication(auth);
-            } catch (NumberFormatException e) {
-                response.sendError(HttpServletResponse.SC_BAD_REQUEST, "Invalid X-Telegram-Chat-Id");
-                return;
-            }
-        } else {
+        {
             // Internal service call without user context (e.g., callbacks)
             var auth = new UsernamePasswordAuthenticationToken(
                     "internal-service", null,

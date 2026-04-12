@@ -3,7 +3,7 @@ package org.gostforge.backend.conversion;
 import lombok.RequiredArgsConstructor;
 import org.gostforge.backend.common.ApiException;
 import org.gostforge.backend.conversion.dto.JobStatusResponse;
-import org.gostforge.backend.storage.MinioStorageService;
+import org.gostforge.backend.storage.LocalFileStorageService;
 import org.gostforge.backend.storage.CasService;
 import org.springframework.core.io.InputStreamResource;
 import org.springframework.http.HttpHeaders;
@@ -12,7 +12,6 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.InputStream;
 import java.util.*;
@@ -31,12 +30,11 @@ public class ConversionController {
 
     private final ConversionService conversionService;
     private final ConversionJobRepository jobRepository;
-    private final MinioStorageService minioStorage;
+    private final LocalFileStorageService minioStorage;
     private final CasService casService;
 
     private static final ObjectMapper OM = new ObjectMapper();
-    private final ScheduledExecutorService sseExecutor = Executors.newScheduledThreadPool(2);
-
+    
     @PostMapping("/check-hashes")
     public ResponseEntity<Map<String, Object>> checkHashes(
             Authentication auth,
@@ -115,48 +113,6 @@ public class ConversionController {
                 .contentType(MediaType.parseMediaType(contentType))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")
                 .body(new InputStreamResource(stream));
-    }
-
-    @GetMapping("/{jobId}/stream")
-    public SseEmitter streamStatus(Authentication auth, @PathVariable UUID jobId) {
-        UUID userId = auth != null ? (UUID) auth.getPrincipal() : null;
-        SseEmitter emitter = new SseEmitter(300_000L);
-
-        sseExecutor.scheduleAtFixedRate(() -> {
-            try {
-                ConversionJob job;
-                if (userId != null) {
-                    job = jobRepository.findByIdAndUserId(jobId, userId).orElse(null);
-                } else {
-                    job = jobRepository.findById(jobId).orElse(null);
-                }
-                
-                if (job == null) {
-                    emitter.completeWithError(new RuntimeException("Job not found"));
-                    return;
-                }
-
-                String event = switch (job.getStatus()) {
-                    case "COMPLETED" -> "completed";
-                    case "FAILED" -> "failed";
-                    case "PENDING" -> "queued";
-                    default -> "status";
-                };
-
-                emitter.send(SseEmitter.event().name(event).data(Map.of(
-                        "jobId", job.getId().toString(),
-                        "status", job.getStatus()
-                )));
-
-                if ("COMPLETED".equals(job.getStatus()) || "FAILED".equals(job.getStatus())) {
-                    emitter.complete();
-                }
-            } catch (Exception e) {
-                emitter.completeWithError(e);
-            }
-        }, 0, 2, TimeUnit.SECONDS);
-
-        return emitter;
     }
 
     private String resolveOutputFormat(String directFormat, String optionsJson) {

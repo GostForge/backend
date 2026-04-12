@@ -23,7 +23,7 @@ import java.util.*;
 @Slf4j
 public class CasService {
 
-    private final MinioStorageService minio;
+    private final LocalFileStorageService minio;
 
     private static final String CAS_PREFIX = "cas/";
 

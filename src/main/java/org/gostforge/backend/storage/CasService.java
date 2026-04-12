@@ -23,7 +23,7 @@ import java.util.*;
 @Slf4j
 public class CasService {
 
-    private final LocalFileStorageService minio;
+    private final LocalFileStorageService fileStorage;
 
     private static final String CAS_PREFIX = "cas/";
 
@@ -34,7 +34,7 @@ public class CasService {
         List<String> missing = new ArrayList<>();
         for (Map.Entry<String, String> entry : manifest.entrySet()) {
             String hash = entry.getValue();
-            if (!minio.objectExists(casKey(hash))) {
+            if (!fileStorage.objectExists(casKey(hash))) {
                 missing.add(entry.getKey());
             }
         }
@@ -53,8 +53,8 @@ public class CasService {
             throw ApiException.badRequest("HASH_MISMATCH",
                     "Hash mismatch for " + path + ": declared=" + declaredHash + ", actual=" + actualHash);
         }
-        if (!minio.objectExists(casKey(declaredHash))) {
-            minio.putObject(casKey(declaredHash), data, "application/octet-stream");
+        if (!fileStorage.objectExists(casKey(declaredHash))) {
+            fileStorage.putObject(casKey(declaredHash), data, "application/octet-stream");
         }
     }
 
@@ -63,17 +63,17 @@ public class CasService {
      */
     public byte[] get(String hash) {
         String key = casKey(hash);
-        if (!minio.objectExists(key)) {
+        if (!fileStorage.objectExists(key)) {
             return null;
         }
-        return minio.getObject(key);
+        return fileStorage.getObject(key);
     }
 
     /**
      * Check whether a hash exists in CAS.
      */
     public boolean exists(String hash) {
-        return minio.objectExists(casKey(hash));
+        return fileStorage.objectExists(casKey(hash));
     }
 
     private String casKey(String hash) {

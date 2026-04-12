@@ -30,9 +30,9 @@ import java.util.zip.ZipInputStream;
 public class ConversionService {
 
     private final ConversionJobRepository jobRepository;
-    private final LocalFileStorageService minioStorage;
+    private final LocalFileStorageService fileStorage;
     private final CasService casService;
-    private final MemoryQueue redis;
+    private final MemoryQueue queue;
     private final Map<ConversionFormat, Map<ConversionFormat, FormatConverter>> converterMap;
 
     private static final String QUEUE_KEY = "gostforge:conversion:queue";
@@ -58,14 +58,14 @@ public class ConversionService {
      */
     public ConversionService(
             ConversionJobRepository jobRepository,
-            LocalFileStorageService minioStorage,
+            LocalFileStorageService fileStorage,
             CasService casService,
-            MemoryQueue redis,
+            MemoryQueue queue,
             List<FormatConverter> converters) {
         this.jobRepository = jobRepository;
-        this.minioStorage = minioStorage;
+        this.fileStorage = fileStorage;
         this.casService = casService;
-        this.redis = redis;
+        this.queue = queue;
 
         this.converterMap = new EnumMap<>(ConversionFormat.class);
         for (FormatConverter c : converters) {
@@ -98,7 +98,7 @@ public class ConversionService {
     @Transactional
     public void crashRecovery() {
         try {
-            redis.clear();
+            queue.clear();
             int recovered = jobRepository.markCrashRecovery(ACTIVE_STATUSES);
             if (recovered > 0) {
                 log.warn("Crash recovery: marked {} jobs as FAILED", recovered);
@@ -134,14 +134,14 @@ public class ConversionService {
                 Map<String, byte[]> extracted = extractZip(rawBytes);
                 for (Map.Entry<String, byte[]> entry : extracted.entrySet()) {
                     String path = entry.getKey();
-                    minioStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
+                    fileStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
                     if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
                 }
             } else {
                 // Single .md file
                 String name = (originalName != null && originalName.endsWith(".docx")) ? (originalName) : ((originalName != null && originalName.endsWith(".md")) ? originalName : "input.md");
                 String contentType = name.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/markdown";
-                minioStorage.putObject(jobPrefix + name, rawBytes, contentType);
+                fileStorage.putObject(jobPrefix + name, rawBytes, contentType);
                 if (name.endsWith(".md")) hasMd = true;
                 if (name.endsWith(".docx")) hasDocx = true;
             }
@@ -164,7 +164,7 @@ public class ConversionService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                redis.push(jobId);
+                queue.push(jobId);
             }
         });
 
@@ -230,7 +230,7 @@ public class ConversionService {
                 throw new RuntimeException("CAS miss after verification: " + path);
             }
             String objectKey = jobPrefix + path;
-            minioStorage.putObject(objectKey, data, guessContentType(path));
+            fileStorage.putObject(objectKey, data, guessContentType(path));
             if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
         }
 
@@ -244,7 +244,7 @@ public class ConversionService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                redis.push(jobId);
+                queue.push(jobId);
             }
         });
 
@@ -279,14 +279,14 @@ public class ConversionService {
             // Step 1: Collect ALL project files from MinIO job workspace
             String jobPrefix = "quick/" + jobId + "/";
             Map<String, byte[]> projectFiles = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-            List<String> allKeys = minioStorage.listObjects(jobPrefix);
+            List<String> allKeys = fileStorage.listObjects(jobPrefix);
             for (String key : allKeys) {
                 if (key.contains("/output.") || key.contains("/result.")) {
                     continue;
                 }
                 String relativePath = key.substring(jobPrefix.length());
                 if (!relativePath.isEmpty()) {
-                    projectFiles.put(relativePath, minioStorage.getObject(key));
+                    projectFiles.put(relativePath, fileStorage.getObject(key));
                 }
             }
 
@@ -304,7 +304,7 @@ public class ConversionService {
                 allWarnings.addAll(mdResult.warnings());
 
                 String zipKey = "quick/" + jobId + "/output-md.zip";
-                minioStorage.putObject(zipKey, zipBytes, "application/zip");
+                fileStorage.putObject(zipKey, zipBytes, "application/zip");
                 job.setMergedMdKey(zipKey);
             } else {
                 // Step 2: MARKDOWN → DOCX via converter pipeline
@@ -317,7 +317,7 @@ public class ConversionService {
                 allWarnings.addAll(docxResult.warnings());
 
                 String docxKey = "quick/" + jobId + "/output.docx";
-                minioStorage.putObject(docxKey, docxBytes,
+                fileStorage.putObject(docxKey, docxBytes,
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
                 job.setDocxKey(docxKey);
 
@@ -331,7 +331,7 @@ public class ConversionService {
                     allWarnings.addAll(pdfResult.warnings());
 
                     String pdfKey = "quick/" + jobId + "/result.pdf";
-                    minioStorage.putObject(pdfKey, pdfResult.data(), "application/pdf");
+                    fileStorage.putObject(pdfKey, pdfResult.data(), "application/pdf");
                     job.setPdfKey(pdfKey);
                 }
             }
@@ -380,7 +380,7 @@ public class ConversionService {
     private JobStatusResponse toStatusResponse(ConversionJob job) {
         Integer queuePos = null;
         if ("PENDING".equals(job.getStatus())) {
-            int p = redis.indexOf(job.getId()); Long pos = p >= 0 ? (long)p : null;
+            int p = queue.indexOf(job.getId()); Long pos = p >= 0 ? (long)p : null;
             if (pos != null && pos >= 0) {
                 queuePos = pos.intValue() + 1;
             }

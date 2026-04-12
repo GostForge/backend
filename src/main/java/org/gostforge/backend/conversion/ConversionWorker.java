@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class ConversionWorker {
 
-    private final MemoryQueue redis;
+    private final MemoryQueue queue;
     private final ConversionService conversionService;
 
     private static final String QUEUE_KEY = "gostforge:conversion:queue";
@@ -52,7 +52,7 @@ public class ConversionWorker {
         while (running.get()) {
             try {
                 // BRPOP with 5-second timeout (returns null if nothing in queue)
-                UUID jobId = redis.pop(5);
+                UUID jobId = queue.pop(5);
                 if (jobId == null) continue;
                 log.info("Worker-{} picked up job {}", workerId, jobId);
                 conversionService.processJob(jobId);

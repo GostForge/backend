@@ -5,10 +5,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.gostforge.backend.common.ApiException;
 import org.gostforge.backend.conversion.dto.JobStatusResponse;
 import org.gostforge.backend.storage.CasService;
-import org.gostforge.backend.storage.MinioStorageService;
+import org.gostforge.backend.storage.LocalFileStorageService;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.gostforge.backend.conversion.MemoryQueue;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -30,9 +30,9 @@ import java.util.zip.ZipInputStream;
 public class ConversionService {
 
     private final ConversionJobRepository jobRepository;
-    private final MinioStorageService minioStorage;
+    private final LocalFileStorageService minioStorage;
     private final CasService casService;
-    private final StringRedisTemplate redis;
+    private final MemoryQueue redis;
     private final Map<ConversionFormat, Map<ConversionFormat, FormatConverter>> converterMap;
 
     private static final String QUEUE_KEY = "gostforge:conversion:queue";
@@ -58,9 +58,9 @@ public class ConversionService {
      */
     public ConversionService(
             ConversionJobRepository jobRepository,
-            MinioStorageService minioStorage,
+            LocalFileStorageService minioStorage,
             CasService casService,
-            StringRedisTemplate redis,
+            MemoryQueue redis,
             List<FormatConverter> converters) {
         this.jobRepository = jobRepository;
         this.minioStorage = minioStorage;
@@ -98,7 +98,7 @@ public class ConversionService {
     @Transactional
     public void crashRecovery() {
         try {
-            redis.delete(QUEUE_KEY);
+            redis.clear();
             int recovered = jobRepository.markCrashRecovery(ACTIVE_STATUSES);
             if (recovered > 0) {
                 log.warn("Crash recovery: marked {} jobs as FAILED", recovered);
@@ -164,7 +164,7 @@ public class ConversionService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                redis.opsForList().leftPush(QUEUE_KEY, jobId.toString());
+                redis.push(jobId);
             }
         });
 
@@ -244,7 +244,7 @@ public class ConversionService {
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
             public void afterCommit() {
-                redis.opsForList().leftPush(QUEUE_KEY, jobId.toString());
+                redis.push(jobId);
             }
         });
 
@@ -380,7 +380,7 @@ public class ConversionService {
     private JobStatusResponse toStatusResponse(ConversionJob job) {
         Integer queuePos = null;
         if ("PENDING".equals(job.getStatus())) {
-            Long pos = redis.opsForList().indexOf(QUEUE_KEY, job.getId().toString());
+            int p = redis.indexOf(job.getId()); Long pos = p >= 0 ? (long)p : null;
             if (pos != null && pos >= 0) {
                 queuePos = pos.intValue() + 1;
             }

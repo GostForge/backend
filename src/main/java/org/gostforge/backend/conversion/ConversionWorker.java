@@ -2,7 +2,7 @@ package org.gostforge.backend.conversion;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.redis.core.StringRedisTemplate;
+import org.gostforge.backend.conversion.MemoryQueue;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Slf4j
 public class ConversionWorker {
 
-    private final StringRedisTemplate redis;
+    private final MemoryQueue redis;
     private final ConversionService conversionService;
 
     private static final String QUEUE_KEY = "gostforge:conversion:queue";
@@ -52,10 +52,8 @@ public class ConversionWorker {
         while (running.get()) {
             try {
                 // BRPOP with 5-second timeout (returns null if nothing in queue)
-                String jobIdStr = redis.opsForList().rightPop(QUEUE_KEY, Duration.ofSeconds(5));
-                if (jobIdStr == null) continue;
-
-                UUID jobId = UUID.fromString(jobIdStr);
+                UUID jobId = redis.pop(5);
+                if (jobId == null) continue;
                 log.info("Worker-{} picked up job {}", workerId, jobId);
                 conversionService.processJob(jobId);
             } catch (Exception e) {

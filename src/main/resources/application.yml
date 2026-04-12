@@ -52,8 +52,8 @@ spring:
 jwt:
   private-key: ${JWT_PRIVATE_KEY:}
   public-key: ${JWT_PUBLIC_KEY:}
-  access-token-ttl: 604800     # 7 days
-  refresh-token-ttl: 2592000   # 30 days
+  access-token-ttl: 2592000     # 30 days
+  
 
 # ── Internal API ──────────────────────────────────
 internal:

@@ -11,7 +11,6 @@ import java.util.UUID;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class AuthResponse {
     private String accessToken;
-    private String refreshToken;
     private UserInfo user;
 
     @Data

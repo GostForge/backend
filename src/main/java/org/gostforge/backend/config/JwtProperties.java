@@ -11,6 +11,5 @@ import org.springframework.stereotype.Component;
 public class JwtProperties {
     private String privateKey;
     private String publicKey;
-    private long accessTokenTtl = 604800;       // 7 days
-    private long refreshTokenTtl = 2592000;     // 30 days
+    private long accessTokenTtl = 2592000;       // 30 days
 }

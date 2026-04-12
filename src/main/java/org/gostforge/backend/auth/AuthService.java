@@ -54,20 +54,7 @@ public class AuthService {
         return buildAuthResponse(user);
     }
 
-    public AuthResponse refresh(String refreshToken) {
-        UUID userId = jwtProvider.consumeRefreshToken(refreshToken)
-                .orElseThrow(() -> ApiException.unauthorized("Invalid or expired refresh token"));
-
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> ApiException.unauthorized("User not found"));
-
-        return buildAuthResponse(user);
-    }
-
-    public void logout(String refreshToken) {
-        jwtProvider.revokeRefreshToken(refreshToken);
-    }
-
+    
     private AuthResponse buildAuthResponse(User user) {
         return buildAuthResponseForUser(user);
     }
@@ -77,11 +64,9 @@ public class AuthService {
      */
     public AuthResponse buildAuthResponseForUser(User user) {
         String accessToken = jwtProvider.createAccessToken(user.getId(), user.getUsername());
-        String refreshToken = jwtProvider.createRefreshToken(user.getId());
 
         return AuthResponse.builder()
                 .accessToken(accessToken)
-                .refreshToken(refreshToken)
                 .user(AuthResponse.UserInfo.builder()
                         .id(user.getId())
                         .username(user.getUsername())

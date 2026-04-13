@@ -7,6 +7,7 @@ import org.gostforge.backend.conversion.dto.JobStatusResponse;
 import org.gostforge.backend.conversion.dto.PublicConversionBoardResponse;
 import org.gostforge.backend.storage.CasService;
 import org.gostforge.backend.storage.LocalFileStorageService;
+import org.gostforge.backend.user.UserRepository;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
@@ -34,6 +35,7 @@ public class ConversionService {
     private final ConversionJobRepository jobRepository;
     private final LocalFileStorageService fileStorage;
     private final CasService casService;
+    private final UserRepository userRepository;
     private final MemoryQueue queue;
     private final Map<ConversionFormat, Map<ConversionFormat, FormatConverter>> converterMap;
 
@@ -61,11 +63,13 @@ public class ConversionService {
             ConversionJobRepository jobRepository,
             LocalFileStorageService fileStorage,
             CasService casService,
+            UserRepository userRepository,
             MemoryQueue queue,
             List<FormatConverter> converters) {
         this.jobRepository = jobRepository;
         this.fileStorage = fileStorage;
         this.casService = casService;
+        this.userRepository = userRepository;
         this.queue = queue;
 
         this.converterMap = new EnumMap<>(ConversionFormat.class);
@@ -270,7 +274,9 @@ public class ConversionService {
     @Transactional(readOnly = true)
     public PublicConversionBoardResponse getPublicBoard(int limit) {
         int safeLimit = Math.max(1, Math.min(limit, 50));
-        Instant since = Instant.now().minus(24, ChronoUnit.HOURS);
+        Instant now = Instant.now();
+        Instant since24h = now.minus(24, ChronoUnit.HOURS);
+        Instant since30d = now.minus(30, ChronoUnit.DAYS);
 
         List<ConversionJob> recentJobs = jobRepository.findRecent(PageRequest.of(0, safeLimit));
         List<PublicConversionBoardResponse.Item> recentItems = recentJobs.stream()
@@ -278,7 +284,7 @@ public class ConversionService {
                 .toList();
 
         return PublicConversionBoardResponse.builder()
-                .generatedAt(Instant.now())
+            .generatedAt(now)
                 .totalJobs(jobRepository.count())
                 .activeJobs(jobRepository.countByStatus("PENDING")
                         + jobRepository.countByStatus("MERGING_MD")
@@ -287,9 +293,12 @@ public class ConversionService {
                         + jobRepository.countByStatus("CONVERTING_MD"))
                 .completedJobs(jobRepository.countByStatus("COMPLETED"))
                 .failedJobs(jobRepository.countByStatus("FAILED"))
-                .submittedLast24h(jobRepository.countByCreatedAtAfter(since))
-                .completedLast24h(jobRepository.countByStatusAndCreatedAtAfter("COMPLETED", since))
-                .failedLast24h(jobRepository.countByStatusAndCreatedAtAfter("FAILED", since))
+            .totalUsers(userRepository.count())
+            .registeredLast24h(userRepository.countByCreatedAtAfter(since24h))
+            .registeredLast30d(userRepository.countByCreatedAtAfter(since30d))
+            .submittedLast24h(jobRepository.countByCreatedAtAfter(since24h))
+            .completedLast24h(jobRepository.countByStatusAndCreatedAtAfter("COMPLETED", since24h))
+            .failedLast24h(jobRepository.countByStatusAndCreatedAtAfter("FAILED", since24h))
                 .recent(recentItems)
                 .build();
     }

@@ -17,6 +17,10 @@ public class PublicConversionBoardResponse {
     private long completedJobs;
     private long failedJobs;
 
+    private long totalUsers;
+    private long registeredLast24h;
+    private long registeredLast30d;
+
     private long submittedLast24h;
     private long completedLast24h;
     private long failedLast24h;

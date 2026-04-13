@@ -28,7 +28,7 @@ public class ConversionController {
 
     private final ConversionService conversionService;
     private final ConversionJobRepository jobRepository;
-    private final LocalFileStorageService minioStorage;
+    private final LocalFileStorageService fileStorage;
     private final CasService casService;
 
     private static final ObjectMapper OM = new ObjectMapper();
@@ -126,7 +126,7 @@ public class ConversionController {
             throw ApiException.notFound("Result file is missing");
         }
 
-        InputStream stream = minioStorage.getObjectStream(key);
+        InputStream stream = fileStorage.getObjectStream(key);
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType(contentType))
                 .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + filename + "\"")

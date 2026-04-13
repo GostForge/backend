@@ -38,9 +38,9 @@ public class ConversionService {
     private final Map<ConversionFormat, Map<ConversionFormat, FormatConverter>> converterMap;
 
     private static final List<String> ACTIVE_STATUSES =
-            List.of("PENDING", "MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF");
+            List.of("PENDING", "MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
     private static final List<String> PROCESSING_STATUSES =
-            List.of("MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF");
+            List.of("MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
     private static final ObjectMapper OM = new ObjectMapper();
 
     // ── ZIP safety limits ────────────────────────────────────────────────────
@@ -110,16 +110,18 @@ public class ConversionService {
     }
 
     @Transactional
-    public JobStatusResponse submitJob(UUID userId, String outputFormat, MultipartFile file) {
+    public JobStatusResponse submitJob(UUID userId, String conversionChain, MultipartFile file) {
         // Check for active job
         List<ConversionJob> active = jobRepository.findActiveJobs(userId, ACTIVE_STATUSES);
         if (!active.isEmpty()) {
             throw ApiException.conflict("ACTIVE_JOB", "You already have an active conversion job");
         }
 
+        ConversionChain chain = ConversionChain.fromString(conversionChain);
+
         ConversionJob job = ConversionJob.builder()
                 .userId(userId)
-                .outputFormat(outputFormat != null ? outputFormat.toUpperCase() : "DOCX")
+                .conversionChain(chain.name())
                 .build();
         job = jobRepository.save(job);
 
@@ -139,7 +141,7 @@ public class ConversionService {
                     if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
                 }
             } else {
-                // Single .md file
+                // Single file upload (.md or .docx)
                 String name = (originalName != null && originalName.endsWith(".docx")) ? (originalName) : ((originalName != null && originalName.endsWith(".md")) ? originalName : "input.md");
                 String contentType = name.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/markdown";
                 fileStorage.putObject(jobPrefix + name, rawBytes, contentType);
@@ -152,10 +154,10 @@ public class ConversionService {
             throw new RuntimeException("Failed to store uploaded file", e);
         }
 
-        if ("MARKDOWN".equalsIgnoreCase(job.getOutputFormat())) {
-            if (!hasDocx && !hasMd) throw ApiException.badRequest("NO_INPUT_FILE", "Upload contains no .docx or .md file");
-        } else {
+        if (chain.requiresMarkdownInput()) {
             if (!hasMd) throw ApiException.badRequest("NO_MD_FILE", "Upload contains no .md file");
+        } else if (!hasDocx) {
+            throw ApiException.badRequest("NO_DOCX_FILE", "Upload contains no .docx file");
         }
 
         jobRepository.save(job);
@@ -178,7 +180,7 @@ public class ConversionService {
      * manifest: full path→sha256 map of ALL project files.
      */
     @Transactional
-    public JobStatusResponse submitJobFromManifest(UUID userId, String outputFormat,
+    public JobStatusResponse submitJobFromManifest(UUID userId, String conversionChain,
                                                    Map<String, String> manifest,
                                                    Map<String, byte[]> uploadedFiles) {
         // Check for active job
@@ -186,6 +188,8 @@ public class ConversionService {
         if (!active.isEmpty()) {
             throw ApiException.conflict("ACTIVE_JOB", "You already have an active conversion job");
         }
+
+        ConversionChain chain = ConversionChain.fromString(conversionChain);
 
         // Verify uploaded files are all in manifest
         for (String path : uploadedFiles.keySet()) {
@@ -216,7 +220,7 @@ public class ConversionService {
         // Create job
         ConversionJob job = ConversionJob.builder()
                 .userId(userId)
-                .outputFormat(outputFormat != null ? outputFormat.toUpperCase() : "DOCX")
+                .conversionChain(chain.name())
                 .build();
         job = jobRepository.save(job);
 
@@ -235,8 +239,12 @@ public class ConversionService {
             if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
         }
 
-        if ("MARKDOWN".equalsIgnoreCase(job.getOutputFormat())) { if (!hasDocx && !hasMd) throw ApiException.badRequest("NO_INPUT_FILE", "Upload contains no .docx or .md file"); } else if (!hasMd) {
-            throw ApiException.badRequest("NO_MD_FILE", "Manifest contains no .md file");
+        if (chain.requiresMarkdownInput()) {
+            if (!hasMd) {
+                throw ApiException.badRequest("NO_MD_FILE", "Manifest contains no .md file");
+            }
+        } else if (!hasDocx) {
+            throw ApiException.badRequest("NO_DOCX_FILE", "Manifest contains no .docx file");
         }
 
         jobRepository.save(job);
@@ -318,12 +326,10 @@ public class ConversionService {
                 }
             }
 
-
-
-            OutputFormat fmt = OutputFormat.fromString(job.getOutputFormat());
+            ConversionChain chain = ConversionChain.fromString(job.getConversionChain());
             List<String> allWarnings = new ArrayList<>();
 
-            if (fmt == OutputFormat.MARKDOWN) {
+            if (chain.producesZipResult()) {
                 job.setStatus("CONVERTING_MD");
                 jobRepository.save(job);
                 FormatConverter docx2md = getConverter(ConversionFormat.DOCX, ConversionFormat.MARKDOWN);
@@ -350,7 +356,7 @@ public class ConversionService {
                 job.setDocxKey(docxKey);
 
                 // Step 3: DOCX → PDF via converter pipeline (if needed)
-                if (fmt == OutputFormat.PDF || fmt == OutputFormat.BOTH) {
+                if (chain.producesPdfResult()) {
                     job.setStatus("CONVERTING_PDF");
                     jobRepository.save(job);
 
@@ -385,7 +391,11 @@ public class ConversionService {
             job.setErrorMessage(e.getMessage());
             if (job.getErrorStage() == null) {
                 job.setErrorStage(
-                    "CONVERTING_PDF".equals(currentStage) ? "CONVERTING_PDF" : "CONVERTING_DOCX");
+                    "CONVERTING_PDF".equals(currentStage)
+                        || "CONVERTING_MD".equals(currentStage)
+                        || "CONVERTING_DOCX".equals(currentStage)
+                        ? currentStage
+                        : "CONVERTING_DOCX");
             }
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
@@ -420,7 +430,7 @@ public class ConversionService {
                 .jobId(job.getId())
                 .status(job.getStatus())
                 .queuePosition(queuePos)
-                .outputFormat(job.getOutputFormat())
+                .conversionChain(job.getConversionChain())
                 .errorStage(job.getErrorStage())
                 .errorMessage(job.getErrorMessage())
                 .warnings(warnings.isEmpty() ? null : warnings)
@@ -451,7 +461,7 @@ public class ConversionService {
         return PublicConversionBoardResponse.Item.builder()
                 .publicId(job.getId() != null ? job.getId().toString().substring(0, 8) : "unknown")
                 .status(job.getStatus())
-                .outputFormat(job.getOutputFormat())
+                .conversionChain(job.getConversionChain())
                 .createdAt(createdAt)
                 .completedAt(completedAt)
                 .durationMs(durationMs)

@@ -58,18 +58,19 @@ public class ConversionController {
             @RequestParam(value = "archive", required = false) MultipartFile archive,
             @RequestParam(value = "files[]", required = false) List<MultipartFile> files,
             @RequestParam(value = "manifest", required = false) String manifestJson,
-            @RequestParam(value = "outputFormat", defaultValue = "DOCX") String outputFormat,
+            @RequestParam(value = "conversionChain", required = false) String conversionChain,
+            @RequestParam(value = "outputFormat", required = false) String outputFormat,
             @RequestParam(value = "options", required = false) String optionsJson) {
 
         UUID userId = (UUID) auth.getPrincipal();
-        String resolvedFormat = resolveOutputFormat(outputFormat, optionsJson);
+        String resolvedChain = resolveConversionChain(conversionChain, outputFormat, optionsJson);
 
         if (manifestJson != null && !manifestJson.isBlank()) {
             Map<String, String> manifest = parseManifest(manifestJson);
             Map<String, byte[]> uploadedFiles = collectUploadedFiles(files);
             try {
                 return ResponseEntity.accepted().body(
-                        conversionService.submitJobFromManifest(userId, resolvedFormat, manifest, uploadedFiles));
+                        conversionService.submitJobFromManifest(userId, resolvedChain, manifest, uploadedFiles));
             } catch (StaleCacheException e) {
                 return ResponseEntity.status(409).body(
                         JobStatusResponse.builder()
@@ -84,7 +85,7 @@ public class ConversionController {
             throw ApiException.badRequest("MISSING_FILE", "No file, archive, or manifest provided");
         }
         return ResponseEntity.accepted().body(
-                conversionService.submitJob(userId, resolvedFormat, input));
+                conversionService.submitJob(userId, resolvedChain, input));
     }
 
     @GetMapping("/{jobId}")
@@ -103,10 +104,23 @@ public class ConversionController {
             throw ApiException.conflict("JOB_NOT_COMPLETE", "Job is not completed yet");
         }
 
-        String format = job.getOutputFormat().toLowerCase();
-        String key = "pdf".equalsIgnoreCase(format) ? job.getPdfKey() : ("markdown".equalsIgnoreCase(format) ? job.getMergedMdKey() : job.getDocxKey());
-        String contentType = "pdf".equalsIgnoreCase(format) ? "application/pdf" : ("markdown".equalsIgnoreCase(format) ? "application/zip" : "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-        String filename = "markdown".equalsIgnoreCase(format) ? "result.zip" : ("output." + format);
+        ConversionChain chain = ConversionChain.fromString(job.getConversionChain());
+        String key;
+        String contentType;
+        String filename;
+        if (chain.producesZipResult()) {
+            key = job.getMergedMdKey();
+            contentType = "application/zip";
+            filename = "result.zip";
+        } else if (chain.producesPdfResult()) {
+            key = job.getPdfKey();
+            contentType = "application/pdf";
+            filename = "output.pdf";
+        } else {
+            key = job.getDocxKey();
+            contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+            filename = "output.docx";
+        }
 
         if (key == null) {
             throw ApiException.notFound("Result file is missing");
@@ -119,17 +133,40 @@ public class ConversionController {
                 .body(new InputStreamResource(stream));
     }
 
-    private String resolveOutputFormat(String directFormat, String optionsJson) {
+    private String resolveChainFromOptions(String directChainValue, String optionsJson) {
         if (optionsJson != null && !optionsJson.isBlank()) {
             try {
                 JsonNode node = OM.readTree(optionsJson);
+                JsonNode chain = node.get("conversionChain");
+                if (chain != null && !chain.isNull() && !chain.asText().isBlank()) {
+                    return ConversionChain.fromString(chain.asText()).name();
+                }
                 JsonNode fmt = node.get("outputFormat");
-                if (fmt != null && !fmt.isNull()) {
-                    return fmt.asText().toUpperCase();
+                if (fmt != null && !fmt.isNull() && !fmt.asText().isBlank()) {
+                    directChainValue = mapLegacyOutputFormat(fmt.asText());
                 }
             } catch (Exception ignored) { }
         }
-        return directFormat.toUpperCase();
+        return ConversionChain.fromString(directChainValue).name();
+    }
+
+    private String resolveConversionChain(String directChain, String outputFormat, String optionsJson) {
+        String chainCandidate = directChain;
+        if (chainCandidate == null || chainCandidate.isBlank()) {
+            chainCandidate = outputFormat != null ? mapLegacyOutputFormat(outputFormat) : null;
+        }
+        return resolveChainFromOptions(chainCandidate, optionsJson);
+    }
+
+    private String mapLegacyOutputFormat(String outputFormat) {
+        if (outputFormat == null || outputFormat.isBlank()) {
+            return ConversionChain.MD_TO_DOCX.name();
+        }
+        return switch (outputFormat.toUpperCase()) {
+            case "PDF", "BOTH" -> ConversionChain.MD_TO_DOCX_TO_PDF.name();
+            case "MARKDOWN" -> ConversionChain.DOCX_TO_MD.name();
+            default -> ConversionChain.MD_TO_DOCX.name();
+        };
     }
 
     private Map<String, String> parseManifest(String json) {

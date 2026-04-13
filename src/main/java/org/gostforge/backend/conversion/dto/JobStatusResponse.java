@@ -15,7 +15,7 @@ public class JobStatusResponse {
     private UUID jobId;
     private String status;
     private Integer queuePosition;
-    private String outputFormat;
+    private String conversionChain;
     private String errorStage;
     private String errorMessage;
     private List<String> warnings;

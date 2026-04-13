@@ -28,7 +28,7 @@ public class PublicConversionBoardResponse {
     public static class Item {
         private String publicId;
         private String status;
-        private String outputFormat;
+        private String conversionChain;
         private Instant createdAt;
         private Instant completedAt;
         private Long durationMs;

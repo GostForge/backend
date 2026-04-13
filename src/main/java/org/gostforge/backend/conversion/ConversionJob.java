@@ -26,9 +26,9 @@ public class ConversionJob {
     @Builder.Default
     private String status = "PENDING";
 
-    @Column(name = "output_format", nullable = false, length = 10)
+    @Column(name = "conversion_chain", nullable = false, length = 20)
     @Builder.Default
-    private String outputFormat = "DOCX";
+    private String conversionChain = "MD_TO_DOCX";
 
     @Column(name = "merged_md_key", length = 500)
     private String mergedMdKey;

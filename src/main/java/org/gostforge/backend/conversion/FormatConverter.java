@@ -8,7 +8,7 @@ import java.util.Map;
  * <p>
  * Each converter transforms data from {@link #inputFormat()} to {@link #outputFormat()}.
  * The pipeline resolver chains converters automatically based on the requested
- * {@link OutputFormat}.
+ * {@link ConversionChain}.
  */
 public interface FormatConverter {
 

@@ -1,6 +1,7 @@
 package org.gostforge.backend.conversion;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
@@ -15,6 +16,15 @@ public interface ConversionJobRepository extends JpaRepository<ConversionJob, UU
 
     @Query("SELECT j FROM ConversionJob j WHERE j.userId = :userId AND j.status IN :statuses")
     List<ConversionJob> findActiveJobs(UUID userId, List<String> statuses);
+
+       @Query("SELECT j FROM ConversionJob j ORDER BY j.createdAt DESC")
+       List<ConversionJob> findRecent(Pageable pageable);
+
+       long countByStatus(String status);
+
+       long countByCreatedAtAfter(Instant after);
+
+       long countByStatusAndCreatedAtAfter(String status, Instant after);
 
     @Query("SELECT j FROM ConversionJob j WHERE j.status IN :statuses AND j.startedAt < :before")
     List<ConversionJob> findTimedOutJobs(List<String> statuses, Instant before);

@@ -51,7 +51,7 @@ jwt:
 
 # ── Internal API ──────────────────────────────────
 internal:
-  api-key: ${INTERNAL_API_KEY:gostforge_internal_dev}
+  api-key: ${INTERNAL_API_KEY:}
 
 # ── Telegram ──────────────────────────────────────
 telegram:

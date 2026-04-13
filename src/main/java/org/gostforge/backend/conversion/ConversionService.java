@@ -4,11 +4,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.gostforge.backend.common.ApiException;
 import org.gostforge.backend.conversion.dto.JobStatusResponse;
+import org.gostforge.backend.conversion.dto.PublicConversionBoardResponse;
 import org.gostforge.backend.storage.CasService;
 import org.gostforge.backend.storage.LocalFileStorageService;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
-import org.gostforge.backend.conversion.MemoryQueue;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -21,6 +22,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -35,7 +37,6 @@ public class ConversionService {
     private final MemoryQueue queue;
     private final Map<ConversionFormat, Map<ConversionFormat, FormatConverter>> converterMap;
 
-    private static final String QUEUE_KEY = "gostforge:conversion:queue";
     private static final List<String> ACTIVE_STATUSES =
             List.of("PENDING", "MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF");
     private static final List<String> PROCESSING_STATUSES =
@@ -258,6 +259,33 @@ public class ConversionService {
         return toStatusResponse(job);
     }
 
+    @Transactional(readOnly = true)
+    public PublicConversionBoardResponse getPublicBoard(int limit) {
+        int safeLimit = Math.max(1, Math.min(limit, 50));
+        Instant since = Instant.now().minus(24, ChronoUnit.HOURS);
+
+        List<ConversionJob> recentJobs = jobRepository.findRecent(PageRequest.of(0, safeLimit));
+        List<PublicConversionBoardResponse.Item> recentItems = recentJobs.stream()
+                .map(this::toPublicBoardItem)
+                .toList();
+
+        return PublicConversionBoardResponse.builder()
+                .generatedAt(Instant.now())
+                .totalJobs(jobRepository.count())
+                .activeJobs(jobRepository.countByStatus("PENDING")
+                        + jobRepository.countByStatus("MERGING_MD")
+                        + jobRepository.countByStatus("CONVERTING_DOCX")
+                        + jobRepository.countByStatus("CONVERTING_PDF")
+                        + jobRepository.countByStatus("CONVERTING_MD"))
+                .completedJobs(jobRepository.countByStatus("COMPLETED"))
+                .failedJobs(jobRepository.countByStatus("FAILED"))
+                .submittedLast24h(jobRepository.countByCreatedAtAfter(since))
+                .completedLast24h(jobRepository.countByStatusAndCreatedAtAfter("COMPLETED", since))
+                .failedLast24h(jobRepository.countByStatusAndCreatedAtAfter("FAILED", since))
+                .recent(recentItems)
+                .build();
+    }
+
     /**
      * Called by ConversionWorker after BRPOP.
      * Uses the {@link FormatConverter} pipeline for actual conversions.
@@ -408,6 +436,28 @@ public class ConversionService {
         } catch (Exception e) {
             return List.of();
         }
+    }
+
+    private PublicConversionBoardResponse.Item toPublicBoardItem(ConversionJob job) {
+        Instant completedAt = job.getCompletedAt();
+        Instant createdAt = job.getCreatedAt();
+        Long durationMs = null;
+        if (createdAt != null && completedAt != null) {
+            durationMs = Math.max(0, ChronoUnit.MILLIS.between(createdAt, completedAt));
+        }
+
+        List<String> warnings = parseWarningsJson(job.getWarnings());
+
+        return PublicConversionBoardResponse.Item.builder()
+                .publicId(job.getId() != null ? job.getId().toString().substring(0, 8) : "unknown")
+                .status(job.getStatus())
+                .outputFormat(job.getOutputFormat())
+                .createdAt(createdAt)
+                .completedAt(completedAt)
+                .durationMs(durationMs)
+                .warningCount(warnings.size())
+                .hasError(job.getErrorMessage() != null && !job.getErrorMessage().isBlank())
+                .build();
     }
 
     /**

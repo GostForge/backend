@@ -3,6 +3,7 @@ package org.gostforge.backend.conversion;
 import lombok.RequiredArgsConstructor;
 import org.gostforge.backend.common.ApiException;
 import org.gostforge.backend.conversion.dto.JobStatusResponse;
+import org.gostforge.backend.conversion.dto.PublicConversionBoardResponse;
 import org.gostforge.backend.storage.LocalFileStorageService;
 import org.gostforge.backend.storage.CasService;
 import org.springframework.core.io.InputStreamResource;
@@ -15,9 +16,6 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.InputStream;
 import java.util.*;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -34,6 +32,12 @@ public class ConversionController {
     private final CasService casService;
 
     private static final ObjectMapper OM = new ObjectMapper();
+
+    @GetMapping("/public/board")
+    public ResponseEntity<PublicConversionBoardResponse> getPublicBoard(
+            @RequestParam(name = "limit", defaultValue = "20") int limit) {
+        return ResponseEntity.ok(conversionService.getPublicBoard(limit));
+    }
     
     @PostMapping("/check-hashes")
     public ResponseEntity<Map<String, Object>> checkHashes(

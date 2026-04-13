@@ -38,11 +38,6 @@ public class ConversionService {
     private final MemoryQueue queue;
     private final Map<ConversionFormat, Map<ConversionFormat, FormatConverter>> converterMap;
 
-    private static final List<String> ACTIVE_STATUSES =
-            List.of("PENDING", "MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
-    private static final List<String> PROCESSING_STATUSES =
-            List.of("MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
-
         private static final String STATUS_PENDING = "PENDING";
         private static final String STATUS_COMPLETED = "COMPLETED";
         private static final String STATUS_FAILED = "FAILED";
@@ -50,6 +45,11 @@ public class ConversionService {
         private static final String STATUS_CONVERTING_MD = "CONVERTING_MD";
         private static final String STATUS_CONVERTING_DOCX = "CONVERTING_DOCX";
         private static final String STATUS_CONVERTING_PDF = "CONVERTING_PDF";
+
+        private static final List<String> ACTIVE_STATUSES =
+            List.of(STATUS_PENDING, STATUS_MERGING_MD, STATUS_CONVERTING_DOCX, STATUS_CONVERTING_PDF, STATUS_CONVERTING_MD);
+        private static final List<String> PROCESSING_STATUSES =
+            List.of(STATUS_MERGING_MD, STATUS_CONVERTING_DOCX, STATUS_CONVERTING_PDF, STATUS_CONVERTING_MD);
 
         private static final String EXT_MD = ".md";
         private static final String EXT_DOCX = ".docx";
@@ -184,7 +184,7 @@ public class ConversionService {
 
     @Transactional(readOnly = true)
     public PublicConversionBoardResponse getPublicBoard(int limit) {
-        int safeLimit = Math.max(1, Math.min(limit, 50));
+        int safeLimit = Math.clamp(limit, 1, 50);
         Instant now = Instant.now();
         Instant since24h = now.minus(24, ChronoUnit.HOURS);
         Instant since30d = now.minus(30, ChronoUnit.DAYS);

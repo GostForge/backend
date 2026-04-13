@@ -344,7 +344,7 @@ public class ConversionService {
             Map<String, byte[]> projectFiles = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
             List<String> allKeys = fileStorage.listObjects(jobPrefix);
             for (String key : allKeys) {
-                if (key.contains("/output.") || key.contains("/result.")) {
+                if (!key.startsWith(jobPrefix)) {
                     continue;
                 }
                 String relativePath = key.substring(jobPrefix.length());

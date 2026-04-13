@@ -12,6 +12,7 @@ import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import jakarta.annotation.PostConstruct;
+import java.util.Locale;
 import java.util.Map;
 
 @Component
@@ -45,11 +46,26 @@ public class Docx2MdConverter implements FormatConverter {
 
     @Override
     public ConversionResult convert(Map<String, byte[]> files) {
-        byte[] docx = files.entrySet().stream()
-            .filter(e -> e.getKey() != null && e.getKey().toLowerCase().endsWith(".docx"))
-            .map(Map.Entry::getValue)
+        if (files == null || files.isEmpty()) {
+            throw new RuntimeException("No DOCX file provided");
+        }
+
+        Map.Entry<String, byte[]> docxEntry = files.entrySet().stream()
+            .filter(e -> e.getKey() != null
+                    && e.getKey().toLowerCase(Locale.ROOT).endsWith(".docx"))
             .findFirst()
-            .orElseThrow(() -> new RuntimeException("No DOCX file provided"));
+            .orElse(null);
+
+        byte[] docx;
+        if (docxEntry != null) {
+            docx = docxEntry.getValue();
+        } else if (files.size() == 1) {
+            Map.Entry<String, byte[]> only = files.entrySet().iterator().next();
+            log.warn("No .docx extension detected, using single input entry: {}", only.getKey());
+            docx = only.getValue();
+        } else {
+            throw new RuntimeException("No DOCX file provided");
+        }
 
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {
             try {

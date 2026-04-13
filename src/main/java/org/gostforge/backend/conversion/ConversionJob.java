@@ -34,12 +34,13 @@ public class ConversionJob {
     @Builder.Default
     private ConversionChain conversionChain = ConversionChain.MD_TO_DOCX;
 
+    @Enumerated(EnumType.STRING)
+    @JdbcTypeCode(SqlTypes.NAMED_ENUM)
+    @Column(name = "result_type", columnDefinition = "conversion_result_type")
+    private ConversionResultType resultType;
+
     @Column(name = "result_key", length = 500)
     private String resultKey;
-
-    @Enumerated(EnumType.STRING)
-    @Column(name = "result_type", length = 20)
-    private ConversionResultType resultType;
 
     @Column(name = "error_message")
     private String errorMessage;

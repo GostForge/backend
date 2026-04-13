@@ -128,7 +128,8 @@ public class ConversionService {
         job = jobRepository.save(job);
 
         String jobPrefix = "quick/" + job.getId() + "/";
-        boolean hasMd = false; boolean hasDocx = false;
+        boolean hasMd = false;
+        boolean hasDocx = false;
 
         try {
             byte[] rawBytes = file.getBytes();
@@ -140,15 +141,25 @@ public class ConversionService {
                 for (Map.Entry<String, byte[]> entry : extracted.entrySet()) {
                     String path = entry.getKey();
                     fileStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
-                    if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
+                    if (hasExtension(path, ".md")) {
+                        hasMd = true;
+                    } else if (hasExtension(path, ".docx")) {
+                        hasDocx = true;
+                    }
                 }
             } else {
                 // Single file upload (.md or .docx)
-                String name = (originalName != null && originalName.endsWith(".docx")) ? (originalName) : ((originalName != null && originalName.endsWith(".md")) ? originalName : "input.md");
-                String contentType = name.endsWith(".docx") ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document" : "text/markdown";
+                String name = resolveUploadedSingleFileName(originalName, chain);
+                String contentType = hasExtension(name, ".docx")
+                        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                        : "text/markdown";
                 fileStorage.putObject(jobPrefix + name, rawBytes, contentType);
-                if (name.endsWith(".md")) hasMd = true;
-                if (name.endsWith(".docx")) hasDocx = true;
+                if (hasExtension(name, ".md")) {
+                    hasMd = true;
+                }
+                if (hasExtension(name, ".docx")) {
+                    hasDocx = true;
+                }
             }
         } catch (ApiException e) {
             throw e;
@@ -226,7 +237,8 @@ public class ConversionService {
 
         // Assemble all files from CAS into job workspace in MinIO
         String jobPrefix = "quick/" + job.getId() + "/";
-        boolean hasMd = false; boolean hasDocx = false;
+        boolean hasMd = false;
+        boolean hasDocx = false;
         for (Map.Entry<String, String> entry : manifest.entrySet()) {
             String path = entry.getKey();
             String hash = entry.getValue();
@@ -236,7 +248,11 @@ public class ConversionService {
             }
             String objectKey = jobPrefix + path;
             fileStorage.putObject(objectKey, data, guessContentType(path));
-            if (path.endsWith(".md")) hasMd = true; else if (path.endsWith(".docx")) hasDocx = true;
+            if (hasExtension(path, ".md")) {
+                hasMd = true;
+            } else if (hasExtension(path, ".docx")) {
+                hasDocx = true;
+            }
         }
 
         if (chain.requiresMarkdownInput()) {
@@ -484,11 +500,25 @@ public class ConversionService {
      * Check whether raw bytes look like a ZIP archive.
      */
     private boolean isZip(byte[] data, String filename) {
-        if (filename != null && filename.toLowerCase().endsWith(".docx")) return false;
-        if (filename != null && filename.toLowerCase().endsWith(".zip")) return true;
+        if (hasExtension(filename, ".docx")) return false;
+        if (hasExtension(filename, ".zip")) return true;
         return data.length >= 4
                 && data[0] == 0x50 && data[1] == 0x4B
                 && data[2] == 0x03 && data[3] == 0x04;
+    }
+
+    private boolean hasExtension(String filename, String extension) {
+        if (filename == null || extension == null) {
+            return false;
+        }
+        return filename.toLowerCase(Locale.ROOT).endsWith(extension.toLowerCase(Locale.ROOT));
+    }
+
+    private String resolveUploadedSingleFileName(String originalName, ConversionChain chain) {
+        if (hasExtension(originalName, ".docx") || hasExtension(originalName, ".md")) {
+            return originalName;
+        }
+        return chain.requiresMarkdownInput() ? "input.md" : "input.docx";
     }
 
     /**

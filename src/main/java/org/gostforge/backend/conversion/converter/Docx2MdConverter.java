@@ -45,7 +45,10 @@ public class Docx2MdConverter implements FormatConverter {
 
     @Override
     public ConversionResult convert(Map<String, byte[]> files) {
-        byte[] docx = files.values().stream().findFirst()
+        byte[] docx = files.entrySet().stream()
+            .filter(e -> e.getKey() != null && e.getKey().toLowerCase().endsWith(".docx"))
+            .map(Map.Entry::getValue)
+            .findFirst()
             .orElseThrow(() -> new RuntimeException("No DOCX file provided"));
 
         for (int attempt = 0; attempt < MAX_RETRIES; attempt++) {

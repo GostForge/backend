@@ -34,14 +34,12 @@ public class ConversionJob {
     @Builder.Default
     private ConversionChain conversionChain = ConversionChain.MD_TO_DOCX;
 
-    @Column(name = "merged_md_key", length = 500)
-    private String mergedMdKey;
+    @Column(name = "result_key", length = 500)
+    private String resultKey;
 
-    @Column(name = "docx_key", length = 500)
-    private String docxKey;
-
-    @Column(name = "pdf_key", length = 500)
-    private String pdfKey;
+    @Enumerated(EnumType.STRING)
+    @Column(name = "result_type", length = 20)
+    private ConversionResultType resultType;
 
     @Column(name = "error_message")
     private String errorMessage;

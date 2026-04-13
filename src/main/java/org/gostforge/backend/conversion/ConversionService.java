@@ -348,9 +348,10 @@ public class ConversionService {
                 byte[] zipBytes = mdResult.data();
                 allWarnings.addAll(mdResult.warnings());
 
-                String zipKey = "quick/" + jobId + "/output-md.zip";
+                String zipKey = "quick/" + jobId + "/result.zip";
                 fileStorage.putObject(zipKey, zipBytes, "application/zip");
-                job.setMergedMdKey(zipKey);
+                job.setResultKey(zipKey);
+                job.setResultType(ConversionResultType.ZIP);
             } else {
                 // Step 2: MARKDOWN → DOCX via converter pipeline
                 job.setStatus("CONVERTING_DOCX");
@@ -360,11 +361,6 @@ public class ConversionService {
                 FormatConverter.ConversionResult docxResult = md2docx.convert(projectFiles);
                 byte[] docxBytes = docxResult.data();
                 allWarnings.addAll(docxResult.warnings());
-
-                String docxKey = "quick/" + jobId + "/output.docx";
-                fileStorage.putObject(docxKey, docxBytes,
-                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-                job.setDocxKey(docxKey);
 
                 // Step 3: DOCX → PDF via converter pipeline (if needed)
                 if (chain.producesPdfResult()) {
@@ -377,7 +373,14 @@ public class ConversionService {
 
                     String pdfKey = "quick/" + jobId + "/result.pdf";
                     fileStorage.putObject(pdfKey, pdfResult.data(), "application/pdf");
-                    job.setPdfKey(pdfKey);
+                    job.setResultKey(pdfKey);
+                    job.setResultType(ConversionResultType.PDF);
+                } else {
+                    String docxKey = "quick/" + jobId + "/result.docx";
+                    fileStorage.putObject(docxKey, docxBytes,
+                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+                    job.setResultKey(docxKey);
+                    job.setResultType(ConversionResultType.DOCX);
                 }
             }
 

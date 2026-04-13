@@ -104,26 +104,28 @@ public class ConversionController {
             throw ApiException.conflict("JOB_NOT_COMPLETE", "Job is not completed yet");
         }
 
-        ConversionChain chain = job.getConversionChain();
-        String key;
-        String contentType;
-        String filename;
-        if (chain.producesZipResult()) {
-            key = job.getMergedMdKey();
-            contentType = "application/zip";
-            filename = "result.zip";
-        } else if (chain.producesPdfResult()) {
-            key = job.getPdfKey();
-            contentType = "application/pdf";
-            filename = "output.pdf";
-        } else {
-            key = job.getDocxKey();
-            contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-            filename = "output.docx";
+        String key = job.getResultKey();
+        ConversionResultType resultType = job.getResultType();
+        if (key == null || resultType == null) {
+            throw ApiException.notFound("Result file is missing");
         }
 
-        if (key == null) {
-            throw ApiException.notFound("Result file is missing");
+        String contentType;
+        String filename;
+        switch (resultType) {
+            case ZIP -> {
+                contentType = "application/zip";
+                filename = "result.zip";
+            }
+            case PDF -> {
+                contentType = "application/pdf";
+                filename = "result.pdf";
+            }
+            case DOCX -> {
+                contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+                filename = "result.docx";
+            }
+            default -> throw ApiException.notFound("Result file type is missing");
         }
 
         InputStream stream = fileStorage.getObjectStream(key);

@@ -104,7 +104,7 @@ public class ConversionController {
             throw ApiException.conflict("JOB_NOT_COMPLETE", "Job is not completed yet");
         }
 
-        ConversionChain chain = ConversionChain.fromString(job.getConversionChain());
+        ConversionChain chain = job.getConversionChain();
         String key;
         String contentType;
         String filename;
@@ -133,29 +133,34 @@ public class ConversionController {
                 .body(new InputStreamResource(stream));
     }
 
-    private String resolveChainFromOptions(String directChainValue, String optionsJson) {
+    private String resolveConversionChain(String directChain, String outputFormat, String optionsJson) {
+        String chainCandidate = directChain;
+        String legacyFormatCandidate = outputFormat;
+
         if (optionsJson != null && !optionsJson.isBlank()) {
             try {
                 JsonNode node = OM.readTree(optionsJson);
                 JsonNode chain = node.get("conversionChain");
-                if (chain != null && !chain.isNull() && !chain.asText().isBlank()) {
-                    return ConversionChain.fromString(chain.asText()).name();
+                if ((chainCandidate == null || chainCandidate.isBlank())
+                        && chain != null && !chain.isNull() && !chain.asText().isBlank()) {
+                    chainCandidate = chain.asText();
                 }
-                JsonNode fmt = node.get("outputFormat");
-                if (fmt != null && !fmt.isNull() && !fmt.asText().isBlank()) {
-                    directChainValue = mapLegacyOutputFormat(fmt.asText());
-                }
-            } catch (Exception ignored) { }
-        }
-        return ConversionChain.fromString(directChainValue).name();
-    }
 
-    private String resolveConversionChain(String directChain, String outputFormat, String optionsJson) {
-        String chainCandidate = directChain;
-        if (chainCandidate == null || chainCandidate.isBlank()) {
-            chainCandidate = outputFormat != null ? mapLegacyOutputFormat(outputFormat) : null;
+                JsonNode fmt = node.get("outputFormat");
+                if ((legacyFormatCandidate == null || legacyFormatCandidate.isBlank())
+                        && fmt != null && !fmt.isNull() && !fmt.asText().isBlank()) {
+                    legacyFormatCandidate = fmt.asText();
+                }
+            } catch (Exception e) {
+                // Keep fallback behavior for malformed options JSON.
+            }
         }
-        return resolveChainFromOptions(chainCandidate, optionsJson);
+
+        if (chainCandidate == null || chainCandidate.isBlank()) {
+            chainCandidate = mapLegacyOutputFormat(legacyFormatCandidate);
+        }
+
+        return ConversionChain.fromString(chainCandidate).name();
     }
 
     private String mapLegacyOutputFormat(String outputFormat) {
@@ -186,7 +191,7 @@ public class ConversionController {
             try {
                 result.put(name, f.getBytes());
             } catch (Exception e) {
-                throw new RuntimeException("Failed to read part: " + name, e);
+                throw ApiException.badRequest("INVALID_PART", "Failed to read multipart item: " + name);
             }
         }
         return result;

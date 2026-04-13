@@ -110,6 +110,6 @@ management:
 # ── Logging ───────────────────────────────────────
 logging:
   level:
-    org.gostforge: DEBUG
+    org.gostforge: INFO
     org.springframework.security: INFO
-    org.hibernate.SQL: DEBUG
+    org.hibernate.SQL: WARN

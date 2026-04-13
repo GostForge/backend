@@ -15,13 +15,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.HexFormat;
 import java.util.List;
-import java.util.UUID;
 
 @Component
 @RequiredArgsConstructor
@@ -29,6 +25,7 @@ import java.util.UUID;
 public class PatAuthenticationFilter extends OncePerRequestFilter {
 
     private final PatRepository patRepository;
+    private static final long LAST_USED_UPDATE_INTERVAL_SECONDS = 60;
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -48,7 +45,7 @@ public class PatAuthenticationFilter extends OncePerRequestFilter {
 
         String rawToken = header.substring(7); // "gstf_..."
         try {
-            String hash = sha256(rawToken);
+            String hash = SecurityUtils.sha256Hex(rawToken);
             var optPat = patRepository.findByTokenHash(hash);
 
             if (optPat.isEmpty()) {
@@ -64,9 +61,12 @@ public class PatAuthenticationFilter extends OncePerRequestFilter {
                 return;
             }
 
-            // Update last used
-            pat.setLastUsed(Instant.now());
-            patRepository.save(pat);
+            Instant now = Instant.now();
+            Instant updateThreshold = now.minusSeconds(LAST_USED_UPDATE_INTERVAL_SECONDS);
+            if (pat.getLastUsed() == null || pat.getLastUsed().isBefore(updateThreshold)) {
+                pat.setLastUsed(now);
+                patRepository.save(pat);
+            }
 
             List<SimpleGrantedAuthority> authorities = new ArrayList<>();
             authorities.add(new SimpleGrantedAuthority("ROLE_USER"));
@@ -83,15 +83,5 @@ public class PatAuthenticationFilter extends OncePerRequestFilter {
         }
 
         chain.doFilter(request, response);
-    }
-
-    private String sha256(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (Exception e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
     }
 }

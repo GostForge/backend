@@ -1,5 +1,6 @@
 package org.gostforge.backend.pat;
 
+import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.gostforge.backend.pat.dto.CreatePatRequest;
 import org.gostforge.backend.pat.dto.PatResponse;
@@ -20,7 +21,7 @@ public class PatController {
 
     @PostMapping
     public ResponseEntity<PatResponse> create(Authentication auth,
-                                              @RequestBody CreatePatRequest request) {
+                              @Valid @RequestBody CreatePatRequest request) {
         UUID userId = (UUID) auth.getPrincipal();
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(patService.create(userId, request));

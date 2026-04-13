@@ -4,11 +4,10 @@ import lombok.RequiredArgsConstructor;
 import org.gostforge.backend.common.ApiException;
 import org.gostforge.backend.pat.dto.CreatePatRequest;
 import org.gostforge.backend.pat.dto.PatResponse;
+import org.gostforge.backend.security.SecurityUtils;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.time.Instant;
 import java.util.*;
@@ -26,7 +25,7 @@ public class PatService {
         byte[] bytes = new byte[32];
         RANDOM.nextBytes(bytes);
         String rawToken = "gstf_" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-        String hash = sha256(rawToken);
+        String hash = SecurityUtils.sha256Hex(rawToken);
 
         Instant expiresAt = null;
         if (req.getExpiresAt() != null && !req.getExpiresAt().isBlank()) {
@@ -77,15 +76,5 @@ public class PatService {
         PersonalAccessToken pat = patRepository.findByIdAndUserId(patId, userId)
                 .orElseThrow(() -> ApiException.notFound("Token not found"));
         patRepository.delete(pat);
-    }
-
-    private String sha256(String input) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (Exception e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
     }
 }

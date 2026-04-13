@@ -2,7 +2,6 @@ package org.gostforge.backend.conversion;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.gostforge.backend.conversion.MemoryQueue;
 import org.springframework.stereotype.Component;
 
 import jakarta.annotation.PostConstruct;
@@ -21,7 +20,6 @@ public class ConversionWorker {
     private final MemoryQueue queue;
     private final ConversionService conversionService;
 
-    private static final String QUEUE_KEY = "gostforge:conversion:queue";
     private static final int WORKER_COUNT = 4;
 
     private ExecutorService executorService;

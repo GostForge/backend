@@ -3,9 +3,12 @@ package org.gostforge.backend.conversion;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 @Entity
@@ -26,9 +29,10 @@ public class ConversionJob {
     @Builder.Default
     private String status = "PENDING";
 
+    @Enumerated(EnumType.STRING)
     @Column(name = "conversion_chain", nullable = false, length = 20)
     @Builder.Default
-    private String conversionChain = "MD_TO_DOCX";
+    private ConversionChain conversionChain = ConversionChain.MD_TO_DOCX;
 
     @Column(name = "merged_md_key", length = 500)
     private String mergedMdKey;
@@ -39,9 +43,6 @@ public class ConversionJob {
     @Column(name = "pdf_key", length = 500)
     private String pdfKey;
 
-    @Column(name = "md2gost_job_id", length = 100)
-    private String md2gostJobId;
-
     @Column(name = "error_message")
     private String errorMessage;
 
@@ -49,8 +50,9 @@ public class ConversionJob {
     private String errorStage;
 
     /** JSON array of conversion warnings (e.g. unsupported elements). */
-    @Column(name = "warnings")
-    private String warnings;
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "warnings", columnDefinition = "jsonb")
+    private List<String> warnings;
 
     @Column(name = "started_at")
     private Instant startedAt;

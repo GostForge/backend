@@ -1,6 +1,5 @@
 package org.gostforge.backend.conversion;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.gostforge.backend.common.ApiException;
 import org.gostforge.backend.conversion.dto.JobStatusResponse;
@@ -43,7 +42,6 @@ public class ConversionService {
             List.of("PENDING", "MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
     private static final List<String> PROCESSING_STATUSES =
             List.of("MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
-    private static final ObjectMapper OM = new ObjectMapper();
 
     // ── ZIP safety limits ────────────────────────────────────────────────────
     /** Maximum number of entries allowed in a ZIP archive. */
@@ -125,7 +123,7 @@ public class ConversionService {
 
         ConversionJob job = ConversionJob.builder()
                 .userId(userId)
-                .conversionChain(chain.name())
+            .conversionChain(chain)
                 .build();
         job = jobRepository.save(job);
 
@@ -163,8 +161,6 @@ public class ConversionService {
         } else if (!hasDocx) {
             throw ApiException.badRequest("NO_DOCX_FILE", "Upload contains no .docx file");
         }
-
-        jobRepository.save(job);
 
         // Enqueue AFTER transaction commits so the worker can find the DB row
         UUID jobId = job.getId();
@@ -224,7 +220,7 @@ public class ConversionService {
         // Create job
         ConversionJob job = ConversionJob.builder()
                 .userId(userId)
-                .conversionChain(chain.name())
+            .conversionChain(chain)
                 .build();
         job = jobRepository.save(job);
 
@@ -251,8 +247,6 @@ public class ConversionService {
             throw ApiException.badRequest("NO_DOCX_FILE", "Manifest contains no .docx file");
         }
 
-        jobRepository.save(job);
-
         UUID jobId = job.getId();
         TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
             @Override
@@ -278,6 +272,18 @@ public class ConversionService {
         Instant since24h = now.minus(24, ChronoUnit.HOURS);
         Instant since30d = now.minus(30, ChronoUnit.DAYS);
 
+        Map<String, Long> allStatusCounts = toStatusCountMap(jobRepository.countByStatusGrouped());
+        Map<String, Long> last24hStatusCounts = toStatusCountMap(jobRepository.countByStatusGroupedAfter(since24h));
+
+        long totalJobs = allStatusCounts.values().stream().mapToLong(Long::longValue).sum();
+        long activeJobs = ACTIVE_STATUSES.stream().mapToLong(status -> countForStatus(allStatusCounts, status)).sum();
+        long completedJobs = countForStatus(allStatusCounts, "COMPLETED");
+        long failedJobs = countForStatus(allStatusCounts, "FAILED");
+
+        long submittedLast24h = last24hStatusCounts.values().stream().mapToLong(Long::longValue).sum();
+        long completedLast24h = countForStatus(last24hStatusCounts, "COMPLETED");
+        long failedLast24h = countForStatus(last24hStatusCounts, "FAILED");
+
         List<ConversionJob> recentJobs = jobRepository.findRecent(PageRequest.of(0, safeLimit));
         List<PublicConversionBoardResponse.Item> recentItems = recentJobs.stream()
                 .map(this::toPublicBoardItem)
@@ -285,20 +291,16 @@ public class ConversionService {
 
         return PublicConversionBoardResponse.builder()
             .generatedAt(now)
-                .totalJobs(jobRepository.count())
-                .activeJobs(jobRepository.countByStatus("PENDING")
-                        + jobRepository.countByStatus("MERGING_MD")
-                        + jobRepository.countByStatus("CONVERTING_DOCX")
-                        + jobRepository.countByStatus("CONVERTING_PDF")
-                        + jobRepository.countByStatus("CONVERTING_MD"))
-                .completedJobs(jobRepository.countByStatus("COMPLETED"))
-                .failedJobs(jobRepository.countByStatus("FAILED"))
+            .totalJobs(totalJobs)
+            .activeJobs(activeJobs)
+            .completedJobs(completedJobs)
+            .failedJobs(failedJobs)
             .totalUsers(userRepository.count())
             .registeredLast24h(userRepository.countByCreatedAtAfter(since24h))
             .registeredLast30d(userRepository.countByCreatedAtAfter(since30d))
-            .submittedLast24h(jobRepository.countByCreatedAtAfter(since24h))
-            .completedLast24h(jobRepository.countByStatusAndCreatedAtAfter("COMPLETED", since24h))
-            .failedLast24h(jobRepository.countByStatusAndCreatedAtAfter("FAILED", since24h))
+            .submittedLast24h(submittedLast24h)
+            .completedLast24h(completedLast24h)
+            .failedLast24h(failedLast24h)
                 .recent(recentItems)
                 .build();
     }
@@ -335,7 +337,7 @@ public class ConversionService {
                 }
             }
 
-            ConversionChain chain = ConversionChain.fromString(job.getConversionChain());
+            ConversionChain chain = job.getConversionChain();
             List<String> allWarnings = new ArrayList<>();
 
             if (chain.producesZipResult()) {
@@ -379,14 +381,7 @@ public class ConversionService {
                 }
             }
 
-            // Store warnings as JSON array
-            if (!allWarnings.isEmpty()) {
-                try {
-                    job.setWarnings(OM.writeValueAsString(allWarnings));
-                } catch (Exception e) {
-                    log.warn("Failed to serialize warnings: {}", e.getMessage());
-                }
-            }
+            job.setWarnings(allWarnings.isEmpty() ? null : List.copyOf(allWarnings));
 
             job.setStatus("COMPLETED");
             job.setCompletedAt(Instant.now());
@@ -424,6 +419,18 @@ public class ConversionService {
         }
     }
 
+    private Map<String, Long> toStatusCountMap(List<ConversionJobRepository.StatusCountRow> rows) {
+        Map<String, Long> counts = new HashMap<>();
+        for (ConversionJobRepository.StatusCountRow row : rows) {
+            counts.put(row.getStatus(), row.getCnt());
+        }
+        return counts;
+    }
+
+    private long countForStatus(Map<String, Long> counts, String status) {
+        return counts.getOrDefault(status, 0L);
+    }
+
     private JobStatusResponse toStatusResponse(ConversionJob job) {
         Integer queuePos = null;
         if ("PENDING".equals(job.getStatus())) {
@@ -433,28 +440,19 @@ public class ConversionService {
             }
         }
 
-        List<String> warnings = parseWarningsJson(job.getWarnings());
+        List<String> warnings = job.getWarnings() == null ? List.of() : job.getWarnings();
 
         return JobStatusResponse.builder()
                 .jobId(job.getId())
                 .status(job.getStatus())
                 .queuePosition(queuePos)
-                .conversionChain(job.getConversionChain())
+                .conversionChain(job.getConversionChain().name())
                 .errorStage(job.getErrorStage())
                 .errorMessage(job.getErrorMessage())
                 .warnings(warnings.isEmpty() ? null : warnings)
                 .createdAt(job.getCreatedAt())
                 .updatedAt(job.getUpdatedAt())
                 .build();
-    }
-
-    private List<String> parseWarningsJson(String json) {
-        if (json == null || json.isBlank()) return List.of();
-        try {
-            return OM.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
-        } catch (Exception e) {
-            return List.of();
-        }
     }
 
     private PublicConversionBoardResponse.Item toPublicBoardItem(ConversionJob job) {
@@ -465,12 +463,12 @@ public class ConversionService {
             durationMs = Math.max(0, ChronoUnit.MILLIS.between(createdAt, completedAt));
         }
 
-        List<String> warnings = parseWarningsJson(job.getWarnings());
+        List<String> warnings = job.getWarnings() == null ? List.of() : job.getWarnings();
 
         return PublicConversionBoardResponse.Item.builder()
                 .publicId(job.getId() != null ? job.getId().toString().substring(0, 8) : "unknown")
                 .status(job.getStatus())
-                .conversionChain(job.getConversionChain())
+            .conversionChain(job.getConversionChain().name())
                 .createdAt(createdAt)
                 .completedAt(completedAt)
                 .durationMs(durationMs)

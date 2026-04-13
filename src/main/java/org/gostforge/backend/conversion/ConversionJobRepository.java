@@ -12,6 +12,11 @@ import java.util.UUID;
 
 public interface ConversionJobRepository extends JpaRepository<ConversionJob, UUID> {
 
+       interface StatusCountRow {
+              String getStatus();
+              long getCnt();
+       }
+
     Optional<ConversionJob> findByIdAndUserId(UUID id, UUID userId);
 
     @Query("SELECT j FROM ConversionJob j WHERE j.userId = :userId AND j.status IN :statuses")
@@ -20,14 +25,11 @@ public interface ConversionJobRepository extends JpaRepository<ConversionJob, UU
        @Query("SELECT j FROM ConversionJob j ORDER BY j.createdAt DESC")
        List<ConversionJob> findRecent(Pageable pageable);
 
-       long countByStatus(String status);
+        @Query("SELECT j.status AS status, COUNT(j) AS cnt FROM ConversionJob j GROUP BY j.status")
+        List<StatusCountRow> countByStatusGrouped();
 
-       long countByCreatedAtAfter(Instant after);
-
-       long countByStatusAndCreatedAtAfter(String status, Instant after);
-
-    @Query("SELECT j FROM ConversionJob j WHERE j.status IN :statuses AND j.startedAt < :before")
-    List<ConversionJob> findTimedOutJobs(List<String> statuses, Instant before);
+        @Query("SELECT j.status AS status, COUNT(j) AS cnt FROM ConversionJob j WHERE j.createdAt >= :after GROUP BY j.status")
+        List<StatusCountRow> countByStatusGroupedAfter(Instant after);
 
     @Modifying
     @Query("UPDATE ConversionJob j SET j.status = 'FAILED', j.errorStage = 'TIMEOUT', " +

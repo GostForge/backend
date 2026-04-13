@@ -3,9 +3,9 @@ package org.gostforge.backend.storage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.gostforge.backend.common.ApiException;
+import org.gostforge.backend.security.SecurityUtils;
 import org.springframework.stereotype.Service;
 
-import java.security.MessageDigest;
 import java.util.*;
 
 /**
@@ -48,7 +48,7 @@ public class CasService {
      * @param path The file path (for error messages).
      */
     public void storeVerified(String declaredHash, byte[] data, String path) {
-        String actualHash = sha256Hex(data);
+        String actualHash = SecurityUtils.sha256Hex(data);
         if (!actualHash.equalsIgnoreCase(declaredHash)) {
             throw ApiException.badRequest("HASH_MISMATCH",
                     "Hash mismatch for " + path + ": declared=" + declaredHash + ", actual=" + actualHash);
@@ -78,18 +78,5 @@ public class CasService {
 
     private String casKey(String hash) {
         return CAS_PREFIX + hash;
-    }
-
-    public static String sha256Hex(byte[] data) {
-        try {
-            byte[] hash = MessageDigest.getInstance("SHA-256").digest(data);
-            StringBuilder sb = new StringBuilder(hash.length * 2);
-            for (byte b : hash) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
-        } catch (Exception e) {
-            throw new RuntimeException("SHA-256 not available", e);
-        }
     }
 }

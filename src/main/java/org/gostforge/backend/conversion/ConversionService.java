@@ -43,6 +43,28 @@ public class ConversionService {
     private static final List<String> PROCESSING_STATUSES =
             List.of("MERGING_MD", "CONVERTING_DOCX", "CONVERTING_PDF", "CONVERTING_MD");
 
+        private static final String STATUS_PENDING = "PENDING";
+        private static final String STATUS_COMPLETED = "COMPLETED";
+        private static final String STATUS_FAILED = "FAILED";
+        private static final String STATUS_MERGING_MD = "MERGING_MD";
+        private static final String STATUS_CONVERTING_MD = "CONVERTING_MD";
+        private static final String STATUS_CONVERTING_DOCX = "CONVERTING_DOCX";
+        private static final String STATUS_CONVERTING_PDF = "CONVERTING_PDF";
+
+        private static final String EXT_MD = ".md";
+        private static final String EXT_DOCX = ".docx";
+        private static final String EXT_ZIP = ".zip";
+
+        private static final String JOB_PREFIX_ROOT = "quick/";
+        private static final String RESULT_ZIP_NAME = "result.zip";
+        private static final String RESULT_DOCX_NAME = "result.docx";
+        private static final String RESULT_PDF_NAME = "result.pdf";
+
+        private static final String CONTENT_TYPE_MD = "text/markdown";
+        private static final String CONTENT_TYPE_DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        private static final String CONTENT_TYPE_PDF = "application/pdf";
+        private static final String CONTENT_TYPE_ZIP = "application/zip";
+
     // ── ZIP safety limits ────────────────────────────────────────────────────
     /** Maximum number of entries allowed in a ZIP archive. */
     private static final int ZIP_MAX_ENTRIES = 500;
@@ -113,74 +135,15 @@ public class ConversionService {
 
     @Transactional
     public JobStatusResponse submitJob(UUID userId, String conversionChain, MultipartFile file) {
-        // Check for active job
-        List<ConversionJob> active = jobRepository.findActiveJobs(userId, ACTIVE_STATUSES);
-        if (!active.isEmpty()) {
-            throw ApiException.conflict("ACTIVE_JOB", "You already have an active conversion job");
-        }
-
+        ensureNoActiveJobs(userId);
         ConversionChain chain = ConversionChain.fromString(conversionChain);
+        ConversionJob job = createPendingJob(userId, chain);
+        String jobPrefix = buildJobPrefix(job.getId());
 
-        ConversionJob job = ConversionJob.builder()
-                .userId(userId)
-            .conversionChain(chain)
-                .build();
-        job = jobRepository.save(job);
+        InputPresence presence = storeUploadedInput(jobPrefix, chain, file);
+        validateInputPresence(chain, presence, false);
 
-        String jobPrefix = "quick/" + job.getId() + "/";
-        boolean hasMd = false;
-        boolean hasDocx = false;
-
-        try {
-            byte[] rawBytes = file.getBytes();
-            String originalName = file.getOriginalFilename();
-
-            if (isZip(rawBytes, originalName)) {
-                // Extract full ZIP structure into MinIO with safety checks
-                Map<String, byte[]> extracted = extractZip(rawBytes);
-                for (Map.Entry<String, byte[]> entry : extracted.entrySet()) {
-                    String path = entry.getKey();
-                    fileStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
-                    if (hasExtension(path, ".md")) {
-                        hasMd = true;
-                    } else if (hasExtension(path, ".docx")) {
-                        hasDocx = true;
-                    }
-                }
-            } else {
-                // Single file upload (.md or .docx)
-                String name = resolveUploadedSingleFileName(originalName, chain);
-                String contentType = hasExtension(name, ".docx")
-                        ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-                        : "text/markdown";
-                fileStorage.putObject(jobPrefix + name, rawBytes, contentType);
-                if (hasExtension(name, ".md")) {
-                    hasMd = true;
-                }
-                if (hasExtension(name, ".docx")) {
-                    hasDocx = true;
-                }
-            }
-        } catch (ApiException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new RuntimeException("Failed to store uploaded file", e);
-        }
-
-        if (chain.requiresMarkdownInput()) {
-            if (!hasMd) throw ApiException.badRequest("NO_MD_FILE", "Upload contains no .md file");
-        } else if (!hasDocx) {
-            throw ApiException.badRequest("NO_DOCX_FILE", "Upload contains no .docx file");
-        }
-
-        // Enqueue AFTER transaction commits so the worker can find the DB row
-        UUID jobId = job.getId();
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                queue.push(jobId);
-            }
-        });
+        enqueueAfterCommit(job.getId());
 
         return toStatusResponse(job);
     }
@@ -194,82 +157,20 @@ public class ConversionService {
     public JobStatusResponse submitJobFromManifest(UUID userId, String conversionChain,
                                                    Map<String, String> manifest,
                                                    Map<String, byte[]> uploadedFiles) {
-        // Check for active job
-        List<ConversionJob> active = jobRepository.findActiveJobs(userId, ACTIVE_STATUSES);
-        if (!active.isEmpty()) {
-            throw ApiException.conflict("ACTIVE_JOB", "You already have an active conversion job");
-        }
-
+        ensureNoActiveJobs(userId);
         ConversionChain chain = ConversionChain.fromString(conversionChain);
 
-        // Verify uploaded files are all in manifest
-        for (String path : uploadedFiles.keySet()) {
-            if (!manifest.containsKey(path)) {
-                throw ApiException.badRequest("UNKNOWN_FILE",
-                        "Uploaded file '" + path + "' is not in manifest");
-            }
-        }
+        verifyUploadedFilesInManifest(manifest, uploadedFiles);
+        storeUploadedFilesToCas(manifest, uploadedFiles);
+        ensureManifestIsPresentInCas(manifest);
 
-        // Store uploaded files in CAS (with hash verification)
-        for (Map.Entry<String, byte[]> entry : uploadedFiles.entrySet()) {
-            String path = entry.getKey();
-            String declaredHash = manifest.get(path);
-            casService.storeVerified(declaredHash, entry.getValue(), path);
-        }
+        ConversionJob job = createPendingJob(userId, chain);
+        String jobPrefix = buildJobPrefix(job.getId());
 
-        // Verify all manifest entries exist in CAS now
-        List<String> stillMissing = new ArrayList<>();
-        for (Map.Entry<String, String> entry : manifest.entrySet()) {
-            if (!casService.exists(entry.getValue())) {
-                stillMissing.add(entry.getKey());
-            }
-        }
-        if (!stillMissing.isEmpty()) {
-            throw new StaleCacheException(stillMissing);
-        }
+        InputPresence presence = restoreManifestWorkspace(jobPrefix, manifest);
+        validateInputPresence(chain, presence, true);
 
-        // Create job
-        ConversionJob job = ConversionJob.builder()
-                .userId(userId)
-            .conversionChain(chain)
-                .build();
-        job = jobRepository.save(job);
-
-        // Assemble all files from CAS into job workspace in MinIO
-        String jobPrefix = "quick/" + job.getId() + "/";
-        boolean hasMd = false;
-        boolean hasDocx = false;
-        for (Map.Entry<String, String> entry : manifest.entrySet()) {
-            String path = entry.getKey();
-            String hash = entry.getValue();
-            byte[] data = casService.get(hash);
-            if (data == null) {
-                throw new RuntimeException("CAS miss after verification: " + path);
-            }
-            String objectKey = jobPrefix + path;
-            fileStorage.putObject(objectKey, data, guessContentType(path));
-            if (hasExtension(path, ".md")) {
-                hasMd = true;
-            } else if (hasExtension(path, ".docx")) {
-                hasDocx = true;
-            }
-        }
-
-        if (chain.requiresMarkdownInput()) {
-            if (!hasMd) {
-                throw ApiException.badRequest("NO_MD_FILE", "Manifest contains no .md file");
-            }
-        } else if (!hasDocx) {
-            throw ApiException.badRequest("NO_DOCX_FILE", "Manifest contains no .docx file");
-        }
-
-        UUID jobId = job.getId();
-        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-            @Override
-            public void afterCommit() {
-                queue.push(jobId);
-            }
-        });
+        enqueueAfterCommit(job.getId());
 
         return toStatusResponse(job);
     }
@@ -293,12 +194,12 @@ public class ConversionService {
 
         long totalJobs = allStatusCounts.values().stream().mapToLong(Long::longValue).sum();
         long activeJobs = ACTIVE_STATUSES.stream().mapToLong(status -> countForStatus(allStatusCounts, status)).sum();
-        long completedJobs = countForStatus(allStatusCounts, "COMPLETED");
-        long failedJobs = countForStatus(allStatusCounts, "FAILED");
+        long completedJobs = countForStatus(allStatusCounts, STATUS_COMPLETED);
+        long failedJobs = countForStatus(allStatusCounts, STATUS_FAILED);
 
         long submittedLast24h = last24hStatusCounts.values().stream().mapToLong(Long::longValue).sum();
-        long completedLast24h = countForStatus(last24hStatusCounts, "COMPLETED");
-        long failedLast24h = countForStatus(last24hStatusCounts, "FAILED");
+        long completedLast24h = countForStatus(last24hStatusCounts, STATUS_COMPLETED);
+        long failedLast24h = countForStatus(last24hStatusCounts, STATUS_FAILED);
 
         List<ConversionJob> recentJobs = jobRepository.findRecent(PageRequest.of(0, safeLimit));
         List<PublicConversionBoardResponse.Item> recentItems = recentJobs.stream()
@@ -328,81 +229,22 @@ public class ConversionService {
     @Transactional
     public void processJob(UUID jobId) {
         ConversionJob job = jobRepository.findById(jobId).orElse(null);
-        if (job == null || !"PENDING".equals(job.getStatus())) {
+        if (job == null || !STATUS_PENDING.equals(job.getStatus())) {
             log.warn("Skipping job {} (status={}, exists={})",
                     jobId, job != null ? job.getStatus() : "N/A", job != null);
             return;
         }
 
-        job.setStatus("MERGING_MD");
+        job.setStatus(STATUS_MERGING_MD);
         job.setStartedAt(Instant.now());
         jobRepository.save(job);
 
         try {
-            // Step 1: Collect ALL project files from MinIO job workspace
-            String jobPrefix = "quick/" + jobId + "/";
-            Map<String, byte[]> projectFiles = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
-            List<String> allKeys = fileStorage.listObjects(jobPrefix);
-            for (String key : allKeys) {
-                if (!key.startsWith(jobPrefix)) {
-                    continue;
-                }
-                String relativePath = key.substring(jobPrefix.length());
-                if (!relativePath.isEmpty()) {
-                    projectFiles.put(relativePath, fileStorage.getObject(key));
-                }
-            }
-
-            ConversionChain chain = job.getConversionChain();
-            List<String> allWarnings = new ArrayList<>();
-
-            if (chain.producesZipResult()) {
-                job.setStatus("CONVERTING_MD");
-                jobRepository.save(job);
-                FormatConverter docx2md = getConverter(ConversionFormat.DOCX, ConversionFormat.MARKDOWN);
-                FormatConverter.ConversionResult mdResult = docx2md.convert(projectFiles);
-                byte[] zipBytes = mdResult.data();
-                allWarnings.addAll(mdResult.warnings());
-
-                String zipKey = "quick/" + jobId + "/result.zip";
-                fileStorage.putObject(zipKey, zipBytes, "application/zip");
-                job.setResultKey(zipKey);
-                job.setResultType(ConversionResultType.ZIP);
-            } else {
-                // Step 2: MARKDOWN → DOCX via converter pipeline
-                job.setStatus("CONVERTING_DOCX");
-                jobRepository.save(job);
-
-                FormatConverter md2docx = getConverter(ConversionFormat.MARKDOWN, ConversionFormat.DOCX);
-                FormatConverter.ConversionResult docxResult = md2docx.convert(projectFiles);
-                byte[] docxBytes = docxResult.data();
-                allWarnings.addAll(docxResult.warnings());
-
-                // Step 3: DOCX → PDF via converter pipeline (if needed)
-                if (chain.producesPdfResult()) {
-                    job.setStatus("CONVERTING_PDF");
-                    jobRepository.save(job);
-
-                    FormatConverter docx2pdf = getConverter(ConversionFormat.DOCX, ConversionFormat.PDF);
-                    FormatConverter.ConversionResult pdfResult = docx2pdf.convert(Map.of("output.docx", docxBytes));
-                    allWarnings.addAll(pdfResult.warnings());
-
-                    String pdfKey = "quick/" + jobId + "/result.pdf";
-                    fileStorage.putObject(pdfKey, pdfResult.data(), "application/pdf");
-                    job.setResultKey(pdfKey);
-                    job.setResultType(ConversionResultType.PDF);
-                } else {
-                    String docxKey = "quick/" + jobId + "/result.docx";
-                    fileStorage.putObject(docxKey, docxBytes,
-                            "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
-                    job.setResultKey(docxKey);
-                    job.setResultType(ConversionResultType.DOCX);
-                }
-            }
+            Map<String, byte[]> projectFiles = collectProjectFiles(jobId);
+            List<String> allWarnings = executeChain(job, jobId, projectFiles);
 
             job.setWarnings(allWarnings.isEmpty() ? null : List.copyOf(allWarnings));
-
-            job.setStatus("COMPLETED");
+            job.setStatus(STATUS_COMPLETED);
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
             log.info("Job {} completed successfully (warnings: {})", jobId, allWarnings.size());
@@ -410,19 +252,230 @@ public class ConversionService {
         } catch (Exception e) {
             log.error("Job {} failed: {}", jobId, e.getMessage(), e);
             String currentStage = job.getStatus();
-            job.setStatus("FAILED");
+            job.setStatus(STATUS_FAILED);
             job.setErrorMessage(e.getMessage());
             if (job.getErrorStage() == null) {
                 job.setErrorStage(
-                    "CONVERTING_PDF".equals(currentStage)
-                        || "CONVERTING_MD".equals(currentStage)
-                        || "CONVERTING_DOCX".equals(currentStage)
+                    STATUS_CONVERTING_PDF.equals(currentStage)
+                        || STATUS_CONVERTING_MD.equals(currentStage)
+                        || STATUS_CONVERTING_DOCX.equals(currentStage)
                         ? currentStage
-                        : "CONVERTING_DOCX");
+                        : STATUS_CONVERTING_DOCX);
             }
             job.setCompletedAt(Instant.now());
             jobRepository.save(job);
         }
+    }
+
+    private record InputPresence(boolean hasMd, boolean hasDocx) {
+    }
+
+    private void ensureNoActiveJobs(UUID userId) {
+        List<ConversionJob> active = jobRepository.findActiveJobs(userId, ACTIVE_STATUSES);
+        if (!active.isEmpty()) {
+            throw ApiException.conflict("ACTIVE_JOB", "You already have an active conversion job");
+        }
+    }
+
+    private ConversionJob createPendingJob(UUID userId, ConversionChain chain) {
+        ConversionJob job = ConversionJob.builder()
+                .userId(userId)
+                .conversionChain(chain)
+                .build();
+        return jobRepository.save(job);
+    }
+
+    private String buildJobPrefix(UUID jobId) {
+        return JOB_PREFIX_ROOT + jobId + "/";
+    }
+
+    private void enqueueAfterCommit(UUID jobId) {
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                queue.push(jobId);
+            }
+        });
+    }
+
+    private InputPresence storeUploadedInput(String jobPrefix, ConversionChain chain, MultipartFile file) {
+        boolean hasMd = false;
+        boolean hasDocx = false;
+
+        try {
+            byte[] rawBytes = file.getBytes();
+            String originalName = file.getOriginalFilename();
+
+            if (isZip(rawBytes, originalName)) {
+                Map<String, byte[]> extracted = extractZip(rawBytes);
+                for (Map.Entry<String, byte[]> entry : extracted.entrySet()) {
+                    String path = entry.getKey();
+                    fileStorage.putObject(jobPrefix + path, entry.getValue(), guessContentType(path));
+                    if (hasExtension(path, EXT_MD)) {
+                        hasMd = true;
+                    } else if (hasExtension(path, EXT_DOCX)) {
+                        hasDocx = true;
+                    }
+                }
+            } else {
+                String name = resolveUploadedSingleFileName(originalName, chain);
+                String contentType = hasExtension(name, EXT_DOCX)
+                        ? CONTENT_TYPE_DOCX
+                        : CONTENT_TYPE_MD;
+                fileStorage.putObject(jobPrefix + name, rawBytes, contentType);
+
+                if (hasExtension(name, EXT_MD)) {
+                    hasMd = true;
+                }
+                if (hasExtension(name, EXT_DOCX)) {
+                    hasDocx = true;
+                }
+            }
+        } catch (ApiException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to store uploaded file", e);
+        }
+
+        return new InputPresence(hasMd, hasDocx);
+    }
+
+    private void verifyUploadedFilesInManifest(Map<String, String> manifest, Map<String, byte[]> uploadedFiles) {
+        for (String path : uploadedFiles.keySet()) {
+            if (!manifest.containsKey(path)) {
+                throw ApiException.badRequest("UNKNOWN_FILE",
+                        "Uploaded file '" + path + "' is not in manifest");
+            }
+        }
+    }
+
+    private void storeUploadedFilesToCas(Map<String, String> manifest, Map<String, byte[]> uploadedFiles) {
+        for (Map.Entry<String, byte[]> entry : uploadedFiles.entrySet()) {
+            String path = entry.getKey();
+            String declaredHash = manifest.get(path);
+            casService.storeVerified(declaredHash, entry.getValue(), path);
+        }
+    }
+
+    private void ensureManifestIsPresentInCas(Map<String, String> manifest) {
+        List<String> stillMissing = new ArrayList<>();
+        for (Map.Entry<String, String> entry : manifest.entrySet()) {
+            if (!casService.exists(entry.getValue())) {
+                stillMissing.add(entry.getKey());
+            }
+        }
+        if (!stillMissing.isEmpty()) {
+            throw new StaleCacheException(stillMissing);
+        }
+    }
+
+    private InputPresence restoreManifestWorkspace(String jobPrefix, Map<String, String> manifest) {
+        boolean hasMd = false;
+        boolean hasDocx = false;
+
+        for (Map.Entry<String, String> entry : manifest.entrySet()) {
+            String path = entry.getKey();
+            String hash = entry.getValue();
+            byte[] data = casService.get(hash);
+            if (data == null) {
+                throw new RuntimeException("CAS miss after verification: " + path);
+            }
+
+            fileStorage.putObject(jobPrefix + path, data, guessContentType(path));
+            if (hasExtension(path, EXT_MD)) {
+                hasMd = true;
+            } else if (hasExtension(path, EXT_DOCX)) {
+                hasDocx = true;
+            }
+        }
+
+        return new InputPresence(hasMd, hasDocx);
+    }
+
+    private void validateInputPresence(ConversionChain chain, InputPresence presence, boolean fromManifest) {
+        if (chain.requiresMarkdownInput()) {
+            if (!presence.hasMd()) {
+                String msg = fromManifest
+                        ? "Manifest contains no .md file"
+                        : "Upload contains no .md file";
+                throw ApiException.badRequest("NO_MD_FILE", msg);
+            }
+            return;
+        }
+
+        if (!presence.hasDocx()) {
+            String msg = fromManifest
+                    ? "Manifest contains no .docx file"
+                    : "Upload contains no .docx file";
+            throw ApiException.badRequest("NO_DOCX_FILE", msg);
+        }
+    }
+
+    private Map<String, byte[]> collectProjectFiles(UUID jobId) {
+        String jobPrefix = buildJobPrefix(jobId);
+        Map<String, byte[]> projectFiles = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        for (String key : fileStorage.listObjects(jobPrefix)) {
+            if (!key.startsWith(jobPrefix)) {
+                continue;
+            }
+            String relativePath = key.substring(jobPrefix.length());
+            if (!relativePath.isEmpty()) {
+                projectFiles.put(relativePath, fileStorage.getObject(key));
+            }
+        }
+        return projectFiles;
+    }
+
+    private List<String> executeChain(ConversionJob job, UUID jobId, Map<String, byte[]> projectFiles) {
+        if (job.getConversionChain().producesZipResult()) {
+            return runDocxToMdChain(job, jobId, projectFiles);
+        }
+        return runMarkdownChain(job, jobId, projectFiles);
+    }
+
+    private List<String> runDocxToMdChain(ConversionJob job, UUID jobId, Map<String, byte[]> projectFiles) {
+        job.setStatus(STATUS_CONVERTING_MD);
+        jobRepository.save(job);
+
+        FormatConverter docx2md = getConverter(ConversionFormat.DOCX, ConversionFormat.MARKDOWN);
+        FormatConverter.ConversionResult mdResult = docx2md.convert(projectFiles);
+
+        String zipKey = buildJobPrefix(jobId) + RESULT_ZIP_NAME;
+        fileStorage.putObject(zipKey, mdResult.data(), CONTENT_TYPE_ZIP);
+        job.setResultKey(zipKey);
+        job.setResultType(ConversionResultType.ZIP);
+        return new ArrayList<>(mdResult.warnings());
+    }
+
+    private List<String> runMarkdownChain(ConversionJob job, UUID jobId, Map<String, byte[]> projectFiles) {
+        job.setStatus(STATUS_CONVERTING_DOCX);
+        jobRepository.save(job);
+
+        FormatConverter md2docx = getConverter(ConversionFormat.MARKDOWN, ConversionFormat.DOCX);
+        FormatConverter.ConversionResult docxResult = md2docx.convert(projectFiles);
+        byte[] docxBytes = docxResult.data();
+
+        List<String> warnings = new ArrayList<>(docxResult.warnings());
+        if (job.getConversionChain().producesPdfResult()) {
+            job.setStatus(STATUS_CONVERTING_PDF);
+            jobRepository.save(job);
+
+            FormatConverter docx2pdf = getConverter(ConversionFormat.DOCX, ConversionFormat.PDF);
+            FormatConverter.ConversionResult pdfResult = docx2pdf.convert(Map.of("output.docx", docxBytes));
+            warnings.addAll(pdfResult.warnings());
+
+            String pdfKey = buildJobPrefix(jobId) + RESULT_PDF_NAME;
+            fileStorage.putObject(pdfKey, pdfResult.data(), CONTENT_TYPE_PDF);
+            job.setResultKey(pdfKey);
+            job.setResultType(ConversionResultType.PDF);
+            return warnings;
+        }
+
+        String docxKey = buildJobPrefix(jobId) + RESULT_DOCX_NAME;
+        fileStorage.putObject(docxKey, docxBytes, CONTENT_TYPE_DOCX);
+        job.setResultKey(docxKey);
+        job.setResultType(ConversionResultType.DOCX);
+        return warnings;
     }
 
     /**
@@ -452,8 +505,9 @@ public class ConversionService {
 
     private JobStatusResponse toStatusResponse(ConversionJob job) {
         Integer queuePos = null;
-        if ("PENDING".equals(job.getStatus())) {
-            int p = queue.indexOf(job.getId()); Long pos = p >= 0 ? (long)p : null;
+        if (STATUS_PENDING.equals(job.getStatus())) {
+            int p = queue.indexOf(job.getId());
+            Long pos = p >= 0 ? (long) p : null;
             if (pos != null && pos >= 0) {
                 queuePos = pos.intValue() + 1;
             }
@@ -500,8 +554,8 @@ public class ConversionService {
      * Check whether raw bytes look like a ZIP archive.
      */
     private boolean isZip(byte[] data, String filename) {
-        if (hasExtension(filename, ".docx")) return false;
-        if (hasExtension(filename, ".zip")) return true;
+        if (hasExtension(filename, EXT_DOCX)) return false;
+        if (hasExtension(filename, EXT_ZIP)) return true;
         return data.length >= 4
                 && data[0] == 0x50 && data[1] == 0x4B
                 && data[2] == 0x03 && data[3] == 0x04;
@@ -515,7 +569,7 @@ public class ConversionService {
     }
 
     private String resolveUploadedSingleFileName(String originalName, ConversionChain chain) {
-        if (hasExtension(originalName, ".docx") || hasExtension(originalName, ".md")) {
+        if (hasExtension(originalName, EXT_DOCX) || hasExtension(originalName, EXT_MD)) {
             return originalName;
         }
         return chain.requiresMarkdownInput() ? "input.md" : "input.docx";
@@ -606,7 +660,7 @@ public class ConversionService {
     }
 
     private String guessContentType(String path) {
-        if (path.endsWith(".md")) return "text/markdown";
+        if (path.endsWith(EXT_MD)) return CONTENT_TYPE_MD;
         if (path.endsWith(".png")) return "image/png";
         if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
         if (path.endsWith(".svg")) return "image/svg+xml";

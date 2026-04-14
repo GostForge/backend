@@ -35,6 +35,7 @@ public class Md2GostConverter implements FormatConverter {
     private static final ObjectMapper OM = new ObjectMapper();
     private static final int MAX_RETRIES = 3;
     private static final long[] DELAYS = {1000, 2000, 4000};
+    private static final String MULTIPART_FILES_FIELD = "files";
 
     @PostConstruct
     void init() {
@@ -65,12 +66,12 @@ public class Md2GostConverter implements FormatConverter {
                             attempt + 1, DELAYS[attempt], e.getMessage());
                     sleep(DELAYS[attempt]);
                 } else {
-                    throw new RuntimeException(
+                    throw new IllegalStateException(
                             "md2gost conversion failed after " + MAX_RETRIES + " attempts: " + e.getMessage(), e);
                 }
             }
         }
-        throw new RuntimeException("md2gost unreachable");
+        throw new IllegalStateException("md2gost unreachable");
     }
 
     private ConversionResult doConvert(Map<String, byte[]> files) {
@@ -85,7 +86,7 @@ public class Md2GostConverter implements FormatConverter {
                     ? MediaType.TEXT_PLAIN
                     : MediaType.APPLICATION_OCTET_STREAM;
 
-            builder.part("files[]", new ByteArrayResource(data) {
+            builder.part(MULTIPART_FILES_FIELD, new ByteArrayResource(data) {
                 @Override public String getFilename() { return path; }
             }).contentType(contentType);
         }
@@ -104,7 +105,7 @@ public class Md2GostConverter implements FormatConverter {
                     return response.bodyToMono(byte[].class)
                         .map(body -> {
                             if (body == null || body.length < 4) {
-                                throw new RuntimeException("md2gost returned malformed response");
+                                throw new IllegalStateException("md2gost returned malformed response");
                             }
                             // Binary framing: [4 bytes: warnings JSON length][warnings JSON bytes][DOCX bytes]
                             int jsonLen = ((body[0] & 0xFF) << 24)
@@ -114,7 +115,7 @@ public class Md2GostConverter implements FormatConverter {
                             String warningsJson = new String(body, 4, jsonLen, StandardCharsets.UTF_8);
                             byte[] docxBytes = Arrays.copyOfRange(body, 4 + jsonLen, body.length);
                             if (docxBytes.length == 0) {
-                                throw new RuntimeException("md2gost returned empty docx");
+                                throw new IllegalStateException("md2gost returned empty docx");
                             }
                             return new ConversionResult(docxBytes, parseWarnings(warningsJson));
                         });
@@ -135,7 +136,7 @@ public class Md2GostConverter implements FormatConverter {
     private void sleep(long ms) {
         try { Thread.sleep(ms); } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            throw new RuntimeException("Interrupted during retry", ie);
+            throw new IllegalStateException("Interrupted during retry", ie);
         }
     }
 }

@@ -116,17 +116,31 @@ public class ConversionService {
     }
 
     /**
-     * Crash recovery: flush Redis queue and mark all in-flight jobs as FAILED.
-     * Runs after full context is ready (ApplicationReadyEvent) so @Transactional works.
+     * Crash recovery: clear in-memory queue, requeue pending jobs,
+     * and mark only actively processing jobs as failed.
      */
     @EventListener(ApplicationReadyEvent.class)
     @Transactional
     public void crashRecovery() {
         try {
             queue.clear();
-            int recovered = jobRepository.markCrashRecovery(ACTIVE_STATUSES);
+
+            List<UUID> pendingIds = jobRepository.findIdsByStatus(STATUS_PENDING);
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    for (UUID pendingId : pendingIds) {
+                        queue.push(pendingId);
+                    }
+                }
+            });
+
+            int recovered = jobRepository.markCrashRecovery(PROCESSING_STATUSES);
             if (recovered > 0) {
                 log.warn("Crash recovery: marked {} jobs as FAILED", recovered);
+            }
+            if (!pendingIds.isEmpty()) {
+                log.info("Crash recovery: re-queued {} pending jobs", pendingIds.size());
             }
         } catch (Exception e) {
             log.error("Crash recovery failed: {}", e.getMessage());
@@ -226,7 +240,6 @@ public class ConversionService {
      * Called by ConversionWorker after BRPOP.
      * Uses the {@link FormatConverter} pipeline for actual conversions.
      */
-    @Transactional
     public void processJob(UUID jobId) {
         ConversionJob job = jobRepository.findById(jobId).orElse(null);
         if (job == null || !STATUS_PENDING.equals(job.getStatus())) {

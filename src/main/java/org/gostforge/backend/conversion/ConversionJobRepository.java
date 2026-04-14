@@ -22,6 +22,9 @@ public interface ConversionJobRepository extends JpaRepository<ConversionJob, UU
     @Query("SELECT j FROM ConversionJob j WHERE j.userId = :userId AND j.status IN :statuses")
     List<ConversionJob> findActiveJobs(UUID userId, List<String> statuses);
 
+       @Query("SELECT j.id FROM ConversionJob j WHERE j.status = :status")
+       List<UUID> findIdsByStatus(String status);
+
        @Query("SELECT j FROM ConversionJob j ORDER BY j.createdAt DESC")
        List<ConversionJob> findRecent(Pageable pageable);
 

@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import org.gostforge.backend.security.InternalServiceFilter;
 import org.gostforge.backend.security.JwtAuthenticationFilter;
 import org.gostforge.backend.security.PatAuthenticationFilter;
+import org.gostforge.backend.security.RateLimitFilter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -23,6 +24,7 @@ public class SecurityConfig {
     private final JwtAuthenticationFilter jwtFilter;
     private final PatAuthenticationFilter patFilter;
     private final InternalServiceFilter internalFilter;
+    private final RateLimitFilter rateLimitFilter;
     private final CorsConfigurationSource corsConfigurationSource;
 
     @Bean
@@ -44,7 +46,8 @@ public class SecurityConfig {
             )
             .addFilterBefore(internalFilter, UsernamePasswordAuthenticationFilter.class)
             .addFilterBefore(patFilter, UsernamePasswordAuthenticationFilter.class)
-            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterAfter(rateLimitFilter, JwtAuthenticationFilter.class);
 
         return http.build();
     }

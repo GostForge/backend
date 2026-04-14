@@ -87,7 +87,7 @@ rate-limit:
   login:
     capacity: 20
     refill: 20
-    duration-minutes: 60
+    duration-minutes: 10
   api:
     capacity: 300
     refill: 300

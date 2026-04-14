@@ -18,6 +18,7 @@ import jakarta.annotation.PostConstruct;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -74,22 +75,19 @@ public class Md2GostConverter implements FormatConverter {
 
     private ConversionResult doConvert(Map<String, byte[]> files) {
         MultipartBodyBuilder builder = new MultipartBodyBuilder();
-        boolean mdFileAdded = false;
-        
+
         for (Map.Entry<String, byte[]> entry : files.entrySet()) {
             String path = entry.getKey();
             byte[] data = entry.getValue();
-            
-            if (!mdFileAdded && (path.endsWith(".md") || path.endsWith(".markdown"))) {
-                builder.part("file", new ByteArrayResource(data) {
-                    @Override public String getFilename() { return path; }
-                }).contentType(MediaType.TEXT_PLAIN);
-                mdFileAdded = true;
-            } else {
-                builder.part("assets", new ByteArrayResource(data) {
-                    @Override public String getFilename() { return path; }
-                }).contentType(MediaType.APPLICATION_OCTET_STREAM);
-            }
+
+            MediaType contentType = path.toLowerCase(Locale.ROOT).endsWith(".md")
+                    || path.toLowerCase(Locale.ROOT).endsWith(".markdown")
+                    ? MediaType.TEXT_PLAIN
+                    : MediaType.APPLICATION_OCTET_STREAM;
+
+            builder.part("files[]", new ByteArrayResource(data) {
+                @Override public String getFilename() { return path; }
+            }).contentType(contentType);
         }
 
         return client.post()

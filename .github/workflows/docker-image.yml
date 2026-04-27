@@ -6,6 +6,8 @@ on:
     paths:
       - "src/**"
       - "Dockerfile"
+      - ".dockerignore"
+      - "docker-entrypoint.sh"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle/**"
@@ -22,6 +24,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Setup Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Build backend jar (native, once)
+        run: |
+          ./gradlew --no-daemon --console=plain bootJar -x test
+          cp build/libs/gostforge-backend.jar backend.jar
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
@@ -50,6 +66,7 @@ jobs:
         with:
           context: .
           file: ./Dockerfile
+          target: runtime-prebuilt
           push: true
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}

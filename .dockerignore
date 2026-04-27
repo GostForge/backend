@@ -3,6 +3,7 @@ build/
 *.jar
 *.class
 .gradle/
+!backend.jar
 
 # VCS / CI
 .git/

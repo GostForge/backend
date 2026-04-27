@@ -55,7 +55,6 @@ public class ConversionService {
         private static final String EXT_DOCX = ".docx";
         private static final String EXT_ZIP = ".zip";
 
-        private static final String JOB_PREFIX_ROOT = "quick/";
         private static final String RESULT_ZIP_NAME = "result.zip";
         private static final String RESULT_DOCX_NAME = "result.docx";
         private static final String RESULT_PDF_NAME = "result.pdf";
@@ -299,7 +298,7 @@ public class ConversionService {
     }
 
     private String buildJobPrefix(UUID jobId) {
-        return JOB_PREFIX_ROOT + jobId + "/";
+        return jobId + "/";
     }
 
     private void enqueueAfterCommit(UUID jobId) {
@@ -426,6 +425,10 @@ public class ConversionService {
 
     private Map<String, byte[]> collectProjectFiles(UUID jobId) {
         String jobPrefix = buildJobPrefix(jobId);
+        return collectProjectFilesByPrefix(jobPrefix);
+    }
+
+    private Map<String, byte[]> collectProjectFilesByPrefix(String jobPrefix) {
         Map<String, byte[]> projectFiles = new TreeMap<>(String.CASE_INSENSITIVE_ORDER);
         for (String key : fileStorage.listObjects(jobPrefix)) {
             if (!key.startsWith(jobPrefix)) {

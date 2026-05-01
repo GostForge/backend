@@ -555,7 +555,7 @@ public class ConversionService {
         List<String> warnings = job.getWarnings() == null ? List.of() : job.getWarnings();
 
         return PublicConversionBoardResponse.Item.builder()
-                .publicId(toPublicId(job.getId()))
+                .userId(toPublicId(job.getUserId()))
                 .status(job.getStatus())
             .conversionChain(job.getConversionChain().name())
                 .createdAt(createdAt)

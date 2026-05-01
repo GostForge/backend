@@ -30,7 +30,7 @@ public class PublicConversionBoardResponse {
     @Data
     @Builder
     public static class Item {
-        private String publicId;
+        private String userId;
         private String status;
         private String conversionChain;
         private Instant createdAt;

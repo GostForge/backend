@@ -35,7 +35,6 @@ public class AuthService {
                 .username(req.getUsername())
                 .email(req.getEmail())
                 .passwordHash(passwordEncoder.encode(req.getPassword()))
-                .displayName(req.getDisplayName())
                 .build();
         user = userRepository.save(user);
 
@@ -71,8 +70,6 @@ public class AuthService {
                         .id(user.getId())
                         .username(user.getUsername())
                         .email(user.getEmail())
-                        .displayName(user.getDisplayName())
-                        .telegramLinked(user.getTelegramChatId() != null)
                         .build())
                 .build();
     }

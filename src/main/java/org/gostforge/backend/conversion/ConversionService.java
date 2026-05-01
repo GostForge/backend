@@ -555,7 +555,7 @@ public class ConversionService {
         List<String> warnings = job.getWarnings() == null ? List.of() : job.getWarnings();
 
         return PublicConversionBoardResponse.Item.builder()
-                .publicId(job.getId() != null ? job.getId().toString().substring(0, 8) : "unknown")
+                .publicId(toPublicId(job.getId()))
                 .status(job.getStatus())
             .conversionChain(job.getConversionChain().name())
                 .createdAt(createdAt)
@@ -564,6 +564,14 @@ public class ConversionService {
                 .warningCount(warnings.size())
                 .hasError(job.getErrorMessage() != null && !job.getErrorMessage().isBlank())
                 .build();
+    }
+
+    private String toPublicId(UUID jobId) {
+        if (jobId == null) {
+            return "unknown";
+        }
+        String value = jobId.toString();
+        return value.length() <= 8 ? value : value.substring(value.length() - 8);
     }
 
     /**

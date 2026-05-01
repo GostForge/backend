@@ -11,7 +11,5 @@ public class UserResponse {
     private UUID id;
     private String username;
     private String email;
-    private String displayName;
-    private boolean telegramLinked;
     private int storageQuotaMb;
 }

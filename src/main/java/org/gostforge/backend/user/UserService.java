@@ -30,9 +30,6 @@ public class UserService {
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> ApiException.notFound("User not found"));
 
-        if (req.getDisplayName() != null) {
-            user.setDisplayName(req.getDisplayName());
-        }
         if (req.getEmail() != null) {
             if (userRepository.existsByEmail(req.getEmail()) &&
                 !user.getEmail().equals(req.getEmail())) {
@@ -63,8 +60,6 @@ public class UserService {
                 .id(user.getId())
                 .username(user.getUsername())
                 .email(user.getEmail())
-                .displayName(user.getDisplayName())
-                .telegramLinked(user.getTelegramChatId() != null)
                 .storageQuotaMb(user.getStorageQuotaMb())
                 .build();
     }

@@ -53,10 +53,6 @@ jwt:
 internal:
   api-key: ${INTERNAL_API_KEY:}
 
-# ── Telegram ──────────────────────────────────────
-telegram:
-  bot-token: ${TELEGRAM_BOT_TOKEN:}
-
 # ── MinIO ─────────────────────────────────────────
 
 # ── External services ─────────────────────────────

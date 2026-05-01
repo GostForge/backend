@@ -10,7 +10,4 @@ public class LoginRequest {
 
     @NotBlank
     private String password;
-
-    /** Optional Telegram Mini App initData — if present, auto-links Telegram after login. */
-    private String telegramInitData;
 }

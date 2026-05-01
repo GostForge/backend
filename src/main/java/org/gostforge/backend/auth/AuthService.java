@@ -59,7 +59,7 @@ public class AuthService {
     }
 
     /**
-     * Build auth response for a given user. Used by TelegramService for Mini App auth.
+     * Build auth response for a given user.
      */
     public AuthResponse buildAuthResponseForUser(User user) {
         String accessToken = jwtProvider.createAccessToken(user.getId(), user.getUsername());

@@ -37,6 +37,6 @@ public class UserController {
                                                @Valid @RequestBody ChangePasswordRequest request) {
         UUID userId = (UUID) auth.getPrincipal();
         userService.changePassword(userId, request);
-        return ResponseEntity.ok().build();
+        return ResponseEntity.noContent().build();
     }
 }

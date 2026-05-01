@@ -17,6 +17,7 @@ public class User {
 
     @Id
     @org.hibernate.annotations.UuidGenerator(style = org.hibernate.annotations.UuidGenerator.Style.TIME)
+    @Column(updatable = false)
     private UUID id;
 
     @Column(nullable = false, unique = true, length = 50)

@@ -20,6 +20,7 @@ public class ConversionJob {
 
     @Id
     @org.hibernate.annotations.UuidGenerator(style = org.hibernate.annotations.UuidGenerator.Style.TIME)
+    @Column(updatable = false)
     private UUID id;
 
     @Column(name = "user_id", nullable = false)

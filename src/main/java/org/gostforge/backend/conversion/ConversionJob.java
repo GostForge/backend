@@ -19,8 +19,9 @@ import java.util.UUID;
 public class ConversionJob {
 
     @Id
+    @GeneratedValue
     @org.hibernate.annotations.UuidGenerator(style = org.hibernate.annotations.UuidGenerator.Style.TIME)
-    @Column(updatable = false)
+    @Column(updatable = false, nullable = false)
     private UUID id;
 
     @Column(name = "user_id", nullable = false)

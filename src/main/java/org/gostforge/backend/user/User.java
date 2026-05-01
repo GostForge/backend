@@ -16,8 +16,9 @@ import java.util.UUID;
 public class User {
 
     @Id
+    @GeneratedValue
     @org.hibernate.annotations.UuidGenerator(style = org.hibernate.annotations.UuidGenerator.Style.TIME)
-    @Column(updatable = false)
+    @Column(updatable = false, nullable = false)
     private UUID id;
 
     @Column(nullable = false, unique = true, length = 50)

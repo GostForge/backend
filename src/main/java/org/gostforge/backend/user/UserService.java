@@ -52,7 +52,6 @@ public class UserService {
         }
 
         user.setPasswordHash(passwordEncoder.encode(req.getNewPassword()));
-        userRepository.save(user);
     }
 
     private UserResponse toResponse(User user) {
